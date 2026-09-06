@@ -1,0 +1,13 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(filevers=(1, 1, 6, 0), prodvers=(1, 1, 6, 0),
+    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[StringFileInfo([StringTable('041104B0', [
+    StringStruct('CompanyName', 'dreamugicya'),
+    StringStruct('FileDescription', 'Ransom encounter settings'),
+    StringStruct('FileVersion', '1.1.6'),
+    StringStruct('InternalName', 'ransom_setting'),
+    StringStruct('OriginalFilename', 'ransom_setting.exe'),
+    StringStruct('ProductName', 'Ransom Visual Simulator'),
+    StringStruct('ProductVersion', '1.1.6')
+  ])]), VarFileInfo([VarStruct('Translation', [0x0411, 1200])])]
+)

@@ -1,0 +1,4 @@
+# Runtime dependencies for running the simulator from source on Windows.
+Pillow>=10.0,<12
+pygame>=2.5,<3
+numpy>=1.26,<3

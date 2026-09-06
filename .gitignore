@@ -31,6 +31,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!ransom.spec
+!ransom_setting.spec
 
 # Installer logs
 pip-log.txt
@@ -216,3 +218,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ransom build artifacts and local state; keep only pre-build source in Git.
+build_*/
+release/
+release_*/
+legacy_releases/
+source_exports/
+*.exe
+*.dll
+*.pyd
+*.spec.bak
+*.pem
+*.key
+Thumbs.db
+Desktop.ini
