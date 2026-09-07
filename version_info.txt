@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 2, 1, 0),
-    prodvers=(1, 2, 1, 0),
+    filevers=(1, 2, 0, 1),
+    prodvers=(1, 2, 0, 1),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'dreamugicya'),
           StringStruct('FileDescription', 'DOORS Ransom visual simulator'),
-          StringStruct('FileVersion', '1.2.1'),
+          StringStruct('FileVersion', '1.2.0.1'),
           StringStruct('InternalName', 'ransom'),
           StringStruct('LegalCopyright', 'Fan-made visual simulator; no file encryption'),
           StringStruct('OriginalFilename', 'ransom.exe'),
           StringStruct('ProductName', 'Ransom Visual Simulator'),
-          StringStruct('ProductVersion', '1.2.1')
+          StringStruct('ProductVersion', '1.2.0.1')
         ]
       )
     ]),
