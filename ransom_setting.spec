@@ -12,11 +12,16 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts, a.binaries, a.datas,
+    pyz, a.scripts, [], [],
     [("O", None, "OPTION"), ("O", None, "OPTION")],
     name="ransom_setting", debug=False, bootloader_ignore_signals=False,
     strip=False, upx=False, runtime_tmpdir=None, console=False,
     icon=[str(project_dir / "assets" / "ransom.ico")],
     version=str(project_dir / "settings_version_info.txt"),
     uac_admin=False, uac_uiaccess=False,
+    exclude_binaries=True,
+)
+coll = COLLECT(
+    exe, a.binaries, a.zipfiles, a.datas,
+    strip=False, upx=False, name="ransom_setting",
 )

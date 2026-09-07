@@ -1,100 +1,127 @@
-# Doors Ransom (A-90) Simulation
+# DOORS Ransom Desktop Encounter
 
-A fan-made recreation of the **Ransom / A-90-style experience from Roblox DOORS**, made as a harmless PC simulation.
+DOORS の Ransom / A-90 を参考にした Windows 用の非公式ファン制作アプリです。警告、STOP、DOWNLOADING、実ウィンドウのミニゲーム、成功・失敗演出を表示します。配布条件は [NOTICE.md](NOTICE.md) を参照してください。
 
-> **Important:** This project is intended as a visual/gameplay simulation only. It is not real ransomware and should not encrypt, delete, steal, or lock user files.
+## 1.2.1 — 2026-09-07
 
-## About
+- `ransom.exe` と `ransom_setting.exe` を、実行環境と資産を一つの自己展開EXEに詰める形式から、内容を確認できるポータブルフォルダ形式へ変更しました。`ransom_file.zip` は `ransom/` と `ransom_setting/` を含みます。展開後は各フォルダ内のEXEを起動し、同じフォルダの他ファイルは移動・削除しないでください。
+- 実際の v1.2.0 ダウンロードで `Trojan:Win32/Bearfoos.B!ml` が Explorer 表示時に検疫されたことを確認しました。v1.2.1 は同じ Defender 定義で、リリースフォルダ・ZIP展開後・Explorer表示を再検査します。これは検知の無効化や除外ではなく、自己展開を行わない通常の配布形式への変更です。
 
-This project tries to recreate the look and feel of the DOORS Ransom/A-90 sequence as closely as possible on Windows.
+## 1.2.0 — 2026-09-07
 
-- Fan-made recreation
-- Focused on visual and audio accuracy
-- Made for entertainment
-- About 20% of the assets were created with AI assistance
+- 設定の Trigger encounter / Restore desktop / Exit app のボタンをクリックし、割り当てたいキーを押して Save で保存できます。Ctrl・Alt・Shiftとの組合せにも対応します。Escはキー選択のキャンセル、Reset hotkeysは従来の `+`・`-`・`*` に戻します。重複・Windows予約キー・他アプリが使用中のキーは保存時に確認します。
+- 設定ウィンドウにフォーカスがある間は、本体のコマンド登録を一時解除します。キー設定中にミニゲームが起動／終了してしまうことを防ぎます。設定画面を閉じるか別ウィンドウへ移ると再登録します。設定を保存すると起動中の本体にも反映され、変更前のキーは解放されます。
+- 各コインの新規出現時、初期値1%で通常コインの代わりにハニーポットが出現します。ドラッグしてRANSOMへ渡すか投げ入れると、初期値500コイン分を一度だけ支払います。自然な重なりは支払われず、残額は0未満になりません。
+- Honeypot chance (%) は0〜100%、Honeypot payment (coins) は整数1〜9990で変更できます。0%で無効、100%ですべてハニーポットです。進行中のミニゲームの確率・支払額は変えず、次回から反映します。最大8個という出現枠は通常コインと共通です。
+- 検知履歴・確認済みの事実・未確定の原因は [検知調査](DETECTION_REVIEW_2026-09-07.md) に記録しています。検知回避のための難読化、除外設定、保護無効化は行っていません。
 
-## Download
+## 2026-09-05 修正
 
-### PC source code (before building)
+- シャットダウン時の壁紙・アイコン残留の原因だった、実壁紙、ショートカットの IconLocation、Windows カーソル、他アプリのアイコン、タスクバー本体への変更処理を削除しました。
+- 赤背景・STOP・赤いタスクバーは、このアプリだけの表示レイヤーです。赤いマウスはレイヤーを重ねず、アプリ内だけのネイティブカーソルに変更しました。終了時は Windows がウィンドウを破棄するため、強制終了で復元処理が呼ばれなくても設定が残りません。他アプリの最小化も行いません。
+- 旧版の復旧監視プロセスを起動しなくなりました。管理者権限不要、UPX 圧縮なし、製品情報を持つポータブルフォルダとしてビルドします。実装変更だけで、すべてのウイルス対策製品の判定や SmartScreen の評価が保証されるわけではありません。
+- RANSOM パネルを参考画像の 315:185 比率で再配置し、残額の Arial Black を同梱の Roboto Mono へ変更しました。見出し・本文・TIME も字幅とサイズを調整しています。本家のフォント名は未確認で、提供画像に合わせた近似です。
+- Windows の表示倍率による文字のはみ出しを抑え、小さな画面ではパネル全体を縮小します。移動・揺れの範囲は作業領域とタイトルバーの余白を考慮します。
+- 赤背景がジャンプスケアや DOWNLOADING を覆わないよう、背景レイヤーの表示をミニゲーム開始時へ揃えました。
+- ミニゲーム中に赤背景だけが手前へ回り、RANSOMや他のポップアップが隠れる不具合を修正しました。約100msごとにアプリ内の重なり順と非表示状態を確認し、必要な場合だけフォーカスを奪わず復帰します。邪魔なポップアップの意図したフェードは維持します。
+- コイン取得時の一瞬の全体消失を抑えるため、ドラッグ中のコインは入力キャプチャを解放して透明にした後、入力処理が終わる次フレームで破棄します。取得後の重なり順は、背景からコインまでを1回のWindowsバッチで戻すため、途中に赤背景だけが見えるフレームを作りません。ドラッグは移動イベントに含まれる古い座標を使わず、現在の画面上のカーソル位置を約60fpsで直接読みます。静止中にはコインのウィンドウを動かしません。
+- メイン画面より左／上にあるサブモニターの配置は、負の Windows 座標で移動します。
+- OS全体のキー／マウス状態を常時読む処理を削除しました。`+`・`-`・`*` だけは明示的なWindowsショートカットとして登録し、それ以外のキー・マウスを監視しません。STOP判定はアプリ自身のウィンドウに届く通常の入力イベントだけを使います。
 
-[**Download the Windows source ZIP**](https://github.com/masashira0212-stack/Doors-Ransom-A-90-Simulation/archive/refs/heads/main.zip)
+## 配布 EXE と操作
 
-You can also click **Code → Download ZIP**. This contains the editable Python source for both `ransom.exe` and `ransom_setting.exe`, the images/audio/font, tests and build configuration. It is the **PC version**, not the Android project. EXEs, caches and personal settings are not included.
+本体は画像・音声・フォント・ランタイムを同梱するポータブルフォルダです。設定画面も別フォルダです。展開後の `ransom/` と `ransom_setting/` はフォルダごと残してください。
 
-Source version: **1.1.6**. The download follows the latest code on `main`.
+| ファイル | 役割 |
+| --- | --- |
+| `release/ransom/ransom.exe` | エンカウント本体。初期値は60〜180秒・500コイン |
+| `release/ransom_setting/ransom_setting.exe` | 必要コイン数、出現間隔の最短・最長、STOP猶予時間（秒）を保存 |
 
-### Ready-to-run EXEs
+`ransom_setting.exe` で数値を入力して「Save」を押し、`ransom.exe` を起動してください。設定画面は英語の標準Windowsコントロールだけを使います。本体は画面を出さずに待機し、エンカウントを繰り返します。ファイル名によるバージョン分けは廃止しました。
 
-Prebuilt downloads belong in the [Releases](https://github.com/masashira0212-stack/Doors-Ransom-A-90-Simulation/releases) section. Downloading source does not install or start the app.
+Required coins（必要コイン数）は0〜9990（10より大きい値は10刻み）、Minimum/Maximum interval（最短／最長の出現間隔）は1〜86400秒で最短≦最長を指定できます。以前のshort相当は100・30・60、really short相当は100・5・20を入力してSaveしてください。
 
-If Windows SmartScreen shows a warning, that can happen with unsigned indie executables. Only download builds from this repository's official Releases page.
+必要コイン数が10以下の場合は、STOP失敗後のDOWNLOADINGが終わったところで演出を消し、次回の待機へ戻ります。コインのミニゲーム、THANK YOU、成功音は出しません。DOWNLOADINGに重なる音声は末尾まで続きます。
 
-## Run or build the PC source
+STOP grace (seconds) はSTOP表示後の猶予時間です。0〜5秒の小数で設定でき、初期値は0.25秒です。その後の判定時間は0.15秒のままです。旧設定ファイルは0.25秒として読み込むため、既存のコイン数や出現間隔を保存し直す必要はありません。
 
-Extract the ZIP first. On Windows, open PowerShell in the extracted folder. Install Python with Tcl/Tk support; the tested build uses **CPython 3.13 x64**.
+保存先は `%LOCALAPPDATA%\DoorsRansomSafeSimulator\settings.json` です。同じWindowsユーザーなら本体と設定EXEを別フォルダーに置いても共有できます。起動中にも約0.25秒以内に読み直し、待機中に出現間隔を変更した場合だけ新しい範囲で待ち時間を引き直します。猶予時間だけの変更では待機タイマーをリセットしません。進行中のミニゲームの残額・制限時間や、既に表示中のSTOPの猶予は変えません。壊れた設定は読み飛ばし、直前の有効な設定を維持します（起動時に読めない場合は初期値）。
+
+旧short系EXEは更新せず、ビルド時に `legacy_releases/` へ退避します。旧版と新版を同時に起動しないでください。
+
+- `+`：待機中に即時エンカウント。テンキーの加算キーまたはメインの `+` が印字されたキー（Shiftなしでも可）。
+- `-`：現在の演出を消して次回の待機へ戻る。アプリは終了しません。
+- `*`：アプリを完全終了。テンキー *、Shift+8、日本語配列の Shift+:/* に対応。
+
+これら3つだけは、待機中に本体ウィンドウが隠れていても使えます。無効化する必要がある場合は `ransom.exe --no-global-hotkeys` を使えます。
+
+- `0`・`1`・`Esc` に特殊操作は割り当てていません。
+
+ファイルの暗号化・削除、実アイコン設定や壁紙の書き換え、入力ロック、権限昇格、自動起動登録、ネット通信は行いません。赤い点滅と大きな音がある演出です。
+
+## 演出の流れ
+
+1. 透過した顔を画面内へ表示。従来の 0.32〜0.40 秒にランダムな 0〜0.30 秒を加え、描画を確認してから STOP へ進みます。
+2. 暗赤色の背景と STOP を表示。設定した猶予時間（初期値0.25秒）の後、0.15秒でキー・ボタン・マウス移動を判定します。顔だけの段階では判定しません。STOP画面が受け取ったキー／ボタン長押しも検出対象です。
+3. STOP 失敗を記録し、STOP 終了後に揺れる顔を 0.80 秒表示します。その後、ドットと 12 分割バーが動く DOWNLOADING を約 1.50 秒表示します。必要コイン数が10以下ならここで演出が終了します。
+4. ミニゲームでは RANSOM パネル、4〜5 個のグリッチウィンドウ、最大 8 個のコイン、半透明の角ドットフレームを表示します。グリッチ画像は各ウィンドウで固定し、約 5 秒でフェードアウト後に補充します。
+5. コインを掴んでパネルに当てるか投げ込むと、10 ずつ支払います。掴んでいないコインの自然な重なりは数えません。投げたコインは邪魔なポップアップで跳ね返ります。
+6. 残額が 0 になると背景レイヤー類が消え、同じパネルが黒くなって中央へ移動し、THANK YOU に変化して少し拡大します。拡大後約 1.8 秒で閉じ、成功音は続きます。
+7. 90 秒で時間切れになると、音楽終盤のジャンプスケアに合わせて最後の顔を約 0.80 秒表示し、次の待機へ戻ります。
+
+音声は `jumpscare2.mp3`（最初の顔）、`jumpscare1.mp3`（STOP 後）、`ransom_ost_to_jumpscare.mp3`（音楽と最後のジャンプスケア）、`ransom_success.ogg`（成功）を使います。`jumpscare1` は元ファイルを先頭から末尾まで再生し、再生開始時だけ 120ms の音量ランプを使います。ファイルの切り抜きはありません。2つの顔の音は別チャンネルで重ねられます。音楽は 11.55 秒地点から開始して 90 秒後に終盤へつなぎます。コイン音は全体音量の 32% です。
+
+## 旧版で残った設定を戻す
+
+現在の EXE は新たに Windows 設定を変更しませんが、旧版で既に残った変更は別途復元が必要です。旧版を終了してから、Python がある PC で次を実行できます。
 
 ```powershell
-py -3.13 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-build-tested.txt
-.\.venv\Scripts\python.exe .\doors_ransom.py --self-test
-.\.venv\Scripts\python.exe .\ransom_setting.py --self-test
+python recovery_watchdog.py --restore-now
 ```
 
-Run the settings editor or game directly:
+`%LOCALAPPDATA%\DoorsRansomSafeSimulator\recovery.json` の元設定を使います。元の記録は別名でバックアップしてから修復します。再起動後に無関係なウィンドウを操作しないよう、古いウィンドウハンドルは復元に使いません。記録がない場合、このツールは設定を推測して変更しません。カスタムアイコンの元設定が失われた場合は、この記録だけでは復元できません。
+
+この復旧ツールはソース配布のみで、現行の EXE へは組み込みません。
+
+## ソースから実行・検証
+
+Python 3.11 以降、Pillow、pygame を使用します。
 
 ```powershell
-.\.venv\Scripts\python.exe .\ransom_setting.py
-.\.venv\Scripts\python.exe .\doors_ransom.py
+python -m pip install -r requirements.txt
+python doors_ransom.py
+python ransom_setting.py
 ```
 
-Build both EXEs using the virtual environment's Python (activation is not required):
+```powershell
+python doors_ransom.py --self-test
+python doors_ransom.py --runtime-self-test
+python security_behavior_test.py
+python hotkey_test.py
+python honeypot_hotkey_test.py
+python smoke_test.py
+python note_layout_test.py
+python system_effects_smoke.py
+python visibility_test.py
+python coin_interaction_test.py
+python shutdown_safety_test.py
+python settings_test.py
+python ransom_setting.py --self-test
+```
+
+GUI 試験は短時間の演出を表示します。`shutdown_safety_test.py` は試験で生成した子プロセスだけを強制終了し、壁紙設定・ショートカット・タスクバーが変わらないことを照合します。実際に PC をシャットダウンする試験ではありません。`note_layout_test.py --preview` は調整済みパネルを約 60 秒表示します。
+
+## 再ビルド
 
 ```powershell
-$env:PATH = "$PWD\.venv\Scripts;$env:PATH"
+python -m pip install -r requirements-build.txt
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_exe.ps1
 ```
 
-The results are `release/ransom.exe` and `release/ransom_setting.exe`. Assets are already included; there is no need to regenerate images or audio. The script runs self-tests and, where available, checks the resulting main EXE with Microsoft Defender. It does not disable protection or add exclusions.
+ソースと配布 EXE は同じプログラムです。ビルド時に音声や画像を再生成せず、既存ファイルをそのまま梱包します。本体と設定EXEをビルドして、両方の自己診断を実行します。各EXEは20,000,000バイト未満に保ち、リリースフォルダと配布ZIPを Defender で検査します。
 
-| File | Purpose |
-| --- | --- |
-| `doors_ransom.py` | Encounter, windows, coins, audio and hotkeys |
-| `ransom_setting.py` | Simple settings editor |
-| `ransom_config.py` | Settings validation and storage |
-| `assets/`, `sounds/` | Required graphics, font and audio |
-| `ransom.spec`, `ransom_setting.spec`, `build_exe.ps1` | EXE build configuration |
-| `*_test.py`, `system_effects_smoke.py` | Verification scripts |
-| `recovery_watchdog.py` | Optional manual recovery utility for older versions; not bundled or run by the current game |
+## 参考・フォント
 
-Controls: **+** triggers an encounter, **-** dismisses it without exiting, **\*** exits completely. Configure coins, minimum/maximum interval and STOP grace in the settings editor. See [the detailed PC guide (Japanese)](PC_GUIDE_JA.md), [publication notice](NOTICE.md) and [false-positive information](FALSE_POSITIVE.md).
-
-## Safety
-
-This project is meant to remain a **harmless simulation**.
-
-It should not:
-
-- Encrypt or modify personal files
-- Delete files
-- Steal passwords or other data
-- Install persistence
-- Spread to other devices
-
-If you fork or modify this project, please keep it safe and clearly label modified builds.
-
-## Credits
-
-- **Project:** CosMicExit
-- **DOORS:** LSPLASH
-
-This is an unofficial fan project and is **not affiliated with or endorsed by LSPLASH or Roblox**.
-
-## AI Disclosure
-
-This project was partially **vibe coded** with the help of AI tools during development.
-
-## License
-
-The source code in this repository is licensed under the [MIT License](LICENSE).
-
-Game names, characters, sounds, images, and other third-party assets remain the property of their respective owners where applicable.
+- [指定動画](https://youtu.be/4FuZ_NT6GuQ)
+- [DOORS Ransom Wiki](https://doorsgame.wiki/wiki/Ransom)
+- [Roboto Mono / Google Fonts](https://github.com/google/fonts/tree/main/ofl/robotomono) — SIL Open Font License 1.1。ライセンスを `assets/RobotoMono-OFL.txt` に同梱。Windows へ恒久インストールせず、アプリのプロセス内だけで読み込みます。

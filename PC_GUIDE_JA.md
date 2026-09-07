@@ -2,6 +2,14 @@
 
 DOORS の Ransom / A-90 を参考にした Windows 用の非公式ファン制作アプリです。警告、STOP、DOWNLOADING、実ウィンドウのミニゲーム、成功・失敗演出を表示します。配布条件は [NOTICE.md](NOTICE.md) を参照してください。
 
+## 1.2.0 — 2026-09-07
+
+- 設定の Trigger encounter / Restore desktop / Exit app のボタンをクリックし、割り当てたいキーを押して Save で保存できます。Ctrl・Alt・Shiftとの組合せにも対応します。Escはキー選択のキャンセル、Reset hotkeysは従来の `+`・`-`・`*` に戻します。重複・Windows予約キー・他アプリが使用中のキーは保存時に確認します。
+- 設定ウィンドウにフォーカスがある間は、本体のコマンド登録を一時解除します。キー設定中にミニゲームが起動／終了してしまうことを防ぎます。設定画面を閉じるか別ウィンドウへ移ると再登録します。設定を保存すると起動中の本体にも反映され、変更前のキーは解放されます。
+- 各コインの新規出現時、初期値1%で通常コインの代わりにハニーポットが出現します。ドラッグしてRANSOMへ渡すか投げ入れると、初期値500コイン分を一度だけ支払います。自然な重なりは支払われず、残額は0未満になりません。
+- Honeypot chance (%) は0〜100%、Honeypot payment (coins) は整数1〜9990で変更できます。0%で無効、100%ですべてハニーポットです。進行中のミニゲームの確率・支払額は変えず、次回から反映します。最大8個という出現枠は通常コインと共通です。
+- 検知履歴・確認済みの事実・未確定の原因は [検知調査](DETECTION_REVIEW_2026-09-07.md) に記録しています。検知回避のための難読化、除外設定、保護無効化は行っていません。
+
 ## 2026-09-05 修正
 
 - シャットダウン時の壁紙・アイコン残留の原因だった、実壁紙、ショートカットの IconLocation、Windows カーソル、他アプリのアイコン、タスクバー本体への変更処理を削除しました。
@@ -85,6 +93,7 @@ python doors_ransom.py --self-test
 python doors_ransom.py --runtime-self-test
 python security_behavior_test.py
 python hotkey_test.py
+python honeypot_hotkey_test.py
 python smoke_test.py
 python note_layout_test.py
 python system_effects_smoke.py

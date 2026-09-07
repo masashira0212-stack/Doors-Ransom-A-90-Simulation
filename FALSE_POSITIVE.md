@@ -7,13 +7,21 @@ desktop icons, or system cursor. It reads only its bundled artwork/audio and
 the simulator settings file in `%LOCALAPPDATA%`; it may query the Windows work
 area and desktop-item count solely to position its own visual windows.
 
-The runtime has no OS-wide keyboard/mouse polling or hooks. It does register
-only the three documented commands (`+`, `-`, and `*`) through the standard
+The runtime has no keyboard hooks, key-state polling, or text capture from
+other applications. Pointer coordinates are read during the active STOP/drag
+interaction. It registers only the three user-configured commands (defaults
+`+`, `-`, and `*`) through the standard
 Windows hotkey-message API, so the hidden simulator can be started, restored,
 or closed without reading any other user input. The source and build
 instructions are included in this project so a release can be inspected and
 reproduced. `security_behavior_test.py` prevents these limits from accidentally
 being broadened.
+
+The settings editor captures a key only while its own key-selection control
+is focused. Command registrations are temporarily released while that editor
+has focus, then restored. Settings are stored locally; no keystrokes are logged.
+The 2026-09-07 investigation is recorded in
+[DETECTION_REVIEW_2026-09-07.md](DETECTION_REVIEW_2026-09-07.md).
 
 ## If Microsoft Defender reports `Trojan:Script/Wacatac.H!ml`
 

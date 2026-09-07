@@ -18,6 +18,8 @@ import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 from ransom_config import DEFAULT_SETTINGS, default_settings_path, load_settings, settings_signature
+from ransom_hotkeys import (DEFAULT_COMMAND_HOTKEYS, command_hotkeys,
+                            event_combination, settings_has_focus)
 
 
 APP_NAME = "RANSOM"
@@ -36,6 +38,7 @@ ASSET_NAMES = (
     "glitch_6.png",
     "ransom_note.png",
     "coin_token.png",
+    "honeypot.png",
     "thank_you.png",
 )
 SYNTH_SOUND_NAMES = (
@@ -66,18 +69,10 @@ RANSOM_FONT_MEDIUM = "Roboto Mono Medium"
 # program observing any other input in Windows.
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
+WM_HOTKEY_UPDATE = 0x8001
 MOD_SHIFT = 0x0004
 MOD_NOREPEAT = 0x4000
-GLOBAL_COMMAND_HOTKEYS: dict[int, tuple[str, int, int]] = {
-    0x5253: ("test", MOD_NOREPEAT, 0x6B),  # numpad +
-    0x5254: ("test", MOD_NOREPEAT | MOD_SHIFT, 0xBB),  # main +
-    0x5255: ("restore", MOD_NOREPEAT, 0x6D),  # numpad -
-    0x5256: ("restore", MOD_NOREPEAT, 0xBD),  # main -
-    0x5257: ("exit", MOD_NOREPEAT, 0x6A),  # numpad *
-    0x5258: ("exit", MOD_NOREPEAT | MOD_SHIFT, 0x38),  # Shift+8
-    0x5259: ("exit", MOD_NOREPEAT | MOD_SHIFT, 0xBA),  # Japanese Shift+:/*
-    0x525A: ("test", MOD_NOREPEAT, 0xBB),  # + labelled key, as in previous releases
-}
+GLOBAL_COMMAND_HOTKEYS = DEFAULT_COMMAND_HOTKEYS
 
 def resource_root() -> Path:
     bundled = getattr(sys, "_MEIPASS", None)
@@ -410,7 +405,11 @@ class RansomSimulator:
         # recorded.  There is deliberately no operating-system-wide keyboard
         # or mouse polling/hook, so the simulator cannot observe other apps.
         self.app_held_inputs: set[tuple[str, str]] = set()
-        self.global_hotkey_events: queue.SimpleQueue[str] = queue.SimpleQueue()
+        self.global_hotkey_events: queue.SimpleQueue[tuple[int, str]] = queue.SimpleQueue()
+        self.global_hotkeys = command_hotkeys(self.settings)
+        self.global_hotkey_revision = 0
+        self.global_hotkey_suspended = False
+        self.global_hotkey_error = ""
         self.global_hotkey_stop = threading.Event()
         self.global_hotkey_ready = threading.Event()
         self.global_hotkey_thread: threading.Thread | None = None
@@ -511,7 +510,7 @@ class RansomSimulator:
     # ---------- controller ----------
 
     def _start_global_command_listener(self) -> None:
-        """Register only the documented +, -, and * commands on Windows.
+        """Register only the three user-selected commands on Windows.
 
         The listener receives WM_HOTKEY messages for these exact combinations;
         it never enumerates keys, captures text, or reads mouse state.  Tk is
@@ -519,6 +518,8 @@ class RansomSimulator:
         """
         if not self.enable_global_hotkeys or self._closing:
             return
+        self.global_hotkey_stop.clear()
+        self.global_hotkey_ready.clear()
         self.global_hotkey_thread = threading.Thread(
             target=self._global_command_listener,
             name="RansomCommandHotkeys",
@@ -558,19 +559,39 @@ class RansomSimulator:
             user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
             user32.GetMessageW.argtypes = [ctypes.POINTER(MSG), ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
             user32.GetMessageW.restype = ctypes.c_int
-            for command_id, (_command, modifiers, virtual_key) in GLOBAL_COMMAND_HOTKEYS.items():
-                if user32.RegisterHotKey(None, command_id, modifiers, virtual_key):
-                    self.global_hotkey_registered_ids.add(command_id)
+            def rebind():
+                for command_id in tuple(self.global_hotkey_registered_ids):
+                    user32.UnregisterHotKey(None, command_id)
+                self.global_hotkey_registered_ids.clear()
+                bindings = {} if self.global_hotkey_suspended else dict(self.global_hotkeys)
+                revision = self.global_hotkey_revision
+                available = set()
+                for command_id, (command, modifiers, virtual_key) in bindings.items():
+                    if user32.RegisterHotKey(None, command_id, modifiers, virtual_key):
+                        self.global_hotkey_registered_ids.add(command_id)
+                        available.add(command)
+                missing = {row[0] for row in bindings.values()} - available
+                self.global_hotkey_error = (
+                    "Hotkeys in use by another app: " + ", ".join(sorted(missing)) if missing else "")
+                return bindings, revision
+
+            bindings, revision = rebind()
             self.global_hotkey_ready.set()
             while not self.global_hotkey_stop.is_set():
                 result = user32.GetMessageW(ctypes.byref(message), None, 0, 0)
                 if result <= 0:
                     break
-                if message.message != WM_HOTKEY:
+                if message.message == WM_HOTKEY_UPDATE:
+                    bindings, revision = rebind()
                     continue
-                hotkey = GLOBAL_COMMAND_HOTKEYS.get(int(message.wParam))
-                if hotkey is not None:
-                    self.global_hotkey_events.put(hotkey[0])
+                if message.message != WM_HOTKEY or self.global_hotkey_suspended:
+                    continue
+                hotkey = bindings.get(int(message.wParam))
+                if hotkey is not None and int(message.wParam) in self.global_hotkey_registered_ids:
+                    actual_key = (int(message.lParam) >> 16) & 0xFFFF
+                    actual_modifiers = int(message.lParam) & 0xF
+                    if (actual_modifiers, actual_key) == (hotkey[1] & 0xF, hotkey[2]):
+                        self.global_hotkey_events.put((revision, hotkey[0]))
         except Exception:
             self.global_hotkey_ready.set()
         finally:
@@ -582,13 +603,27 @@ class RansomSimulator:
             self.global_hotkey_registered_ids.clear()
             self.global_hotkey_thread_id = 0
 
+    def _sync_global_hotkeys(self) -> None:
+        bindings = command_hotkeys(self.settings)
+        suspended = settings_has_focus() if self.enable_global_hotkeys else False
+        if bindings == self.global_hotkeys and suspended == self.global_hotkey_suspended:
+            return
+        self.global_hotkeys = bindings
+        self.global_hotkey_suspended = suspended
+        self.global_hotkey_revision += 1
+        if self.global_hotkey_thread_id:
+            ctypes.windll.user32.PostThreadMessageW(self.global_hotkey_thread_id, WM_HOTKEY_UPDATE, 0, 0)
+
     def _drain_global_commands(self) -> None:
         self.global_hotkey_after_id = None
+        self._sync_global_hotkeys()
         while True:
             try:
-                command = self.global_hotkey_events.get_nowait()
+                revision, command = self.global_hotkey_events.get_nowait()
             except queue.Empty:
                 break
+            if self.global_hotkey_suspended or revision != self.global_hotkey_revision:
+                continue
             self._run_command(command)
             if self._closing:
                 return
@@ -913,6 +948,7 @@ class RansomSimulator:
             or updated.max_spawn_seconds != self.settings.max_spawn_seconds
         )
         self.settings = updated
+        self._sync_global_hotkeys()
         self.STARTING_BALANCE = updated.required_coins
         self.REACTION_ARM_DELAY_MS = round(updated.stop_grace_seconds * 1000)
         self.min_wait_var.set(str(updated.min_spawn_seconds))
@@ -1162,16 +1198,21 @@ class RansomSimulator:
         keysym = getattr(event, "keysym", "")
         character = getattr(event, "char", "")
         self.app_held_inputs.add(("key", keysym))
-        if keysym in {"asterisk", "KP_Multiply"} or character == "*":
-            self._run_command("exit")
-            return
-        if keysym in {"minus", "KP_Subtract"} or character == "-":
-            self._run_command("restore")
-            return
-        plus_pressed = keysym in {"plus", "KP_Add"} or character == "+"
-        if plus_pressed:
-            self._run_command("test")
-            return
+        combination = event_combination(event)
+        for command, modifiers, key in self.global_hotkeys.values():
+            if combination == (modifiers & 0xF, key):
+                self._run_command(command)
+                return
+        # Tk-only previews and non-Windows tests may not provide a Win32 VK.
+        if not combination[1]:
+            for binding, command, configured, symbols in (
+                ("*", "exit", self.settings.exit_hotkey, {"asterisk", "KP_Multiply"}),
+                ("-", "restore", self.settings.restore_hotkey, {"minus", "KP_Subtract"}),
+                ("+", "test", self.settings.trigger_hotkey, {"plus", "KP_Add"}),
+            ):
+                if configured == binding and (character == binding or keysym in symbols):
+                    self._run_command(command)
+                    return
         if self.stage != "reaction":
             return
         self._input_violation()
@@ -1397,6 +1438,7 @@ class RansomSimulator:
             return
         self._destroy_overlay()
         self.stage = "ransom"
+        self.encounter_settings = self.settings
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         self._fit_note_to_screen()
@@ -1828,13 +1870,20 @@ class RansomSimulator:
         self.note_window.lift()
         self._later(self.rng.randint(4000, 6000), self._move_note_window)
 
+    def _choose_collectible(self) -> tuple[str, int]:
+        settings = getattr(self, "encounter_settings", self.settings)
+        if self.rng.random() < settings.honeypot_chance_percent / 100.0:
+            return "honeypot.png", settings.honeypot_value
+        return "coin_token.png", self.COIN_VALUE
+
     def _spawn_coin(self) -> None:
         if self.stage != "ransom":
             return
         if len(self.coin_windows) < self.MAX_COIN_WINDOWS:
             coin_id = self.next_coin_id
             self.next_coin_id += 1
-            size = self.rng.randint(58, 72)
+            asset, value = self._choose_collectible()
+            size = self.rng.randint(78, 90) if asset == "honeypot.png" else self.rng.randint(58, 72)
             x, y = self._coin_position(size)
             key_color = "#010203"
             window = tk.Toplevel(self.root)
@@ -1856,7 +1905,7 @@ class RansomSimulator:
                 cursor=self.minigame_cursor,
             )
             canvas.pack(fill="both", expand=True)
-            coin_photo = self._photo("coin_token.png", (size, size))
+            coin_photo = self._photo(asset, (size, size))
             canvas.create_image(size // 2, size // 2, image=coin_photo)
             # A clicked coin must not become the active top-level window.
             # Otherwise destroying it on payment can activate/raise the red
@@ -1869,6 +1918,8 @@ class RansomSimulator:
                 "window": window,
                 "canvas": canvas,
                 "photo": coin_photo,
+                "asset": asset,
+                "value": value,
                 "x": float(x),
                 "y": float(y),
                 "size": size,
@@ -1913,15 +1964,16 @@ class RansomSimulator:
     def _collect_coin(self, coin_id: int) -> None:
         if self.stage != "ransom":
             return
-        record = self.coin_windows.pop(coin_id, None)
-        if record is None:
+        record = self.coin_windows.get(coin_id)
+        if record is None or not record.get("user_armed", False):
             return
+        self.coin_windows.pop(coin_id)
         # During a drag this top-level still owns mouse capture.  Destroying it
         # synchronously made Windows choose a new active topmost window and the
         # opaque red backdrop could win one compositor frame. Hide its canvas
         # now, release capture, then destroy it after the input message ends.
         self._retire_collected_coin(record)
-        self.balance = max(0, self.balance - self.COIN_VALUE)
+        self.balance = max(0, self.balance - int(record.get("value", self.COIN_VALUE)))
         self.audio.play("coin.wav", channel="coin")
         if self.note_canvas is not None and self.balance_item is not None:
             self.note_canvas.itemconfigure(self.balance_item, text=str(self.balance))

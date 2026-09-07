@@ -13,11 +13,13 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 MAIN_SOURCE = (PROJECT_DIR / "doors_ransom.py").read_text(encoding="utf-8")
+RUNTIME_SOURCE = "\n".join((PROJECT_DIR / name).read_text(encoding="utf-8") for name in (
+    "doors_ransom.py", "ransom_hotkeys.py", "ransom_config.py", "ransom_setting.py"))
 SPEC_SOURCE = (PROJECT_DIR / "ransom.spec").read_text(encoding="utf-8")
 
 
 def require_absent(token: str) -> None:
-    if token in MAIN_SOURCE:
+    if token in RUNTIME_SOURCE:
         raise AssertionError(f"main runtime contains prohibited capability: {token}")
 
 
@@ -55,8 +57,10 @@ def main() -> int:
         raise AssertionError("packaging requests elevated or UIAccess privileges")
     if "recovery_watchdog" in SPEC_SOURCE:
         raise AssertionError("legacy recovery code must not be bundled into ransom.exe")
+    if "exclude_binaries=True" not in SPEC_SOURCE or "COLLECT(" not in SPEC_SOURCE:
+        raise AssertionError("release must use an inspectable portable-folder package")
 
-    print("SECURITY BEHAVIOR OK: only explicit +, -, * hotkeys; no polling/hooks, network, persistence, elevation, or wallpaper writes")
+    print("SECURITY BEHAVIOR OK: inspectable portable package; explicit configurable command hotkeys; no key polling/hooks, network, persistence, elevation, or wallpaper writes")
     return 0
 
 

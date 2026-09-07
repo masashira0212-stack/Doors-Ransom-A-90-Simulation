@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+from dataclasses import replace
 import os
 import tkinter as tk
 import time
@@ -55,6 +56,7 @@ def main() -> int:
     root = tk.Tk()
     root.withdraw()
     simulator = RansomSimulator(root, demo_defaults=True, headless=True, enable_shell_effects=False, use_saved_settings=False)
+    simulator.settings = replace(simulator.settings, honeypot_chance_percent=0)
     simulator.volume_var.set(0)
     simulator.audio.set_volume(0)
     simulator.repeat_var.set(False)
@@ -507,6 +509,7 @@ def main() -> int:
         if not simulator.coin_windows:
             simulator._spawn_coin()
         coin_id = next(iter(simulator.coin_windows))
+        simulator.coin_windows[coin_id]["user_armed"] = True  # simulate an intentional payment
         simulator._collect_coin(coin_id)
         root.update()
 

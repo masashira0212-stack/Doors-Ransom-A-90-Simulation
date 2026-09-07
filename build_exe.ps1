@@ -19,6 +19,8 @@ python .\security_behavior_test.py
 if ($LASTEXITCODE -ne 0) { throw "Security behavior regression test failed" }
 python .\ransom_setting.py --self-test
 if ($LASTEXITCODE -ne 0) { throw "Settings source self-test failed" }
+python .\honeypot_hotkey_test.py
+if ($LASTEXITCODE -ne 0) { throw "Honeypot/hotkey regression test failed" }
 
 python -m PyInstaller `
     --noconfirm `
@@ -28,7 +30,7 @@ python -m PyInstaller `
     "$projectDir\ransom.spec"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 
-$builtExe = Join-Path $releaseDir "ransom.exe"
+$builtExe = Join-Path $releaseDir "ransom\ransom.exe"
 foreach ($testArguments in @("--self-test", "--runtime-self-test")) {
     $testProcess = Start-Process -FilePath $builtExe -ArgumentList $testArguments -WindowStyle Hidden -PassThru
     if (-not $testProcess.WaitForExit(60000)) {
@@ -66,7 +68,7 @@ python -m PyInstaller `
     --workpath "$projectDir\build" `
     "$projectDir\ransom_setting.spec"
 if ($LASTEXITCODE -ne 0) { throw "Settings PyInstaller build failed" }
-$settingsExe = Join-Path $releaseDir "ransom_setting.exe"
+$settingsExe = Join-Path $releaseDir "ransom_setting\ransom_setting.exe"
 $settingsTest = Start-Process -FilePath $settingsExe -ArgumentList "--self-test" -WindowStyle Hidden -PassThru
 if (-not $settingsTest.WaitForExit(60000)) {
     Stop-Process -Id $settingsTest.Id -Force -ErrorAction SilentlyContinue
@@ -75,6 +77,27 @@ if (-not $settingsTest.WaitForExit(60000)) {
 if ($settingsTest.ExitCode -ne 0) { throw "Packaged settings self-test failed" }
 $settingsSize = (Get-Item -LiteralPath $settingsExe).Length
 if ($settingsSize -ge 20000000) { throw "Settings EXE exceeds 20 MB" }
+if ($mpCmdRun) {
+    & $mpCmdRun -Scan -ScanType 3 -File $settingsExe
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $settingsExe -PathType Leaf)) {
+        throw "Microsoft Defender rejected ransom_setting.exe; do not distribute this build"
+    }
+}
+
+# A release is a portable folder pair, not a self-extracting EXE. Keep the
+# ZIP alongside it so the exact artifact distributed to players is scanned.
+$packageZip = Join-Path $releaseDir "ransom_file.zip"
+if (Test-Path -LiteralPath $packageZip -PathType Leaf) {
+    throw "Build output already contains ransom_file.zip; use a new output directory"
+}
+Compress-Archive -LiteralPath (Join-Path $releaseDir "ransom"), (Join-Path $releaseDir "ransom_setting") `
+    -DestinationPath $packageZip -CompressionLevel Optimal
+if ($mpCmdRun) {
+    & $mpCmdRun -Scan -ScanType 3 -File $releaseDir
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $packageZip -PathType Leaf)) {
+        throw "Microsoft Defender rejected the portable release; do not distribute this build"
+    }
+}
 
 # Retire old variants only after both new EXEs pass. Keep recoverable copies
 # outside release so only the two current programs are distributed.
@@ -93,4 +116,5 @@ foreach ($variantName in @("ransom_midium.exe", "ransom_short.exe", "ransom_real
         Move-Item -LiteralPath $variantExe -Destination $archiveTarget
     }
 }
-Write-Host "Built and verified ransom.exe ($builtSize bytes) and ransom_setting.exe ($settingsSize bytes)"
+$packageSize = (Get-Item -LiteralPath $packageZip).Length
+Write-Host "Built and verified portable ransom.exe ($builtSize bytes), ransom_setting.exe ($settingsSize bytes), and ransom_file.zip ($packageSize bytes)"

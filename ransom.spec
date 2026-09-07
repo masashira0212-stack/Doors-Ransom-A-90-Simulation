@@ -9,6 +9,7 @@ runtime_script = project_dir / "doors_ransom.py"
 safe_asset_names = [
     "attack_face.png",
     "coin_token.png",
+    "honeypot.png",
     "final_face.png",
     "flash_face.png",
     "glitch_1.png",
@@ -144,11 +145,15 @@ a.datas = [
 
 pyz = PYZ(a.pure)
 
+# Keep the runtime beside the executable instead of packing it into one
+# self-extracting file. The program has no installer, persistence, or hidden
+# child process; a portable folder is easier for players and security tools to
+# inspect before running it.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
+    [],
+    [],
     [("O", None, "OPTION"), ("O", None, "OPTION")],
     name="ransom",
     debug=False,
@@ -167,4 +172,15 @@ exe = EXE(
     version=str(project_dir / "version_info.txt"),
     uac_admin=False,
     uac_uiaccess=False,
+    exclude_binaries=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="ransom",
 )

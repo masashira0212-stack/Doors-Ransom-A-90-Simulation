@@ -1,6 +1,7 @@
 """Coin dragging and payment must not jitter or restack the whole game visibly."""
 
 import ctypes
+from dataclasses import replace
 import tkinter as tk
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,6 +26,7 @@ def main():
     root = tk.Tk()
     root.withdraw()
     app = RansomSimulator(root, enable_shell_effects=True, use_saved_settings=False)
+    app.settings = replace(app.settings, honeypot_chance_percent=0)
     app.volume_var.set(0)
     app.audio.set_volume(0)
     try:

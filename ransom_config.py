@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import tempfile
 
+from ransom_hotkeys import validate_bindings
+
 
 @dataclass(frozen=True)
 class RansomSettings:
@@ -16,10 +18,17 @@ class RansomSettings:
     min_spawn_seconds: float = 60.0
     max_spawn_seconds: float = 180.0
     stop_grace_seconds: float = 0.25
+    trigger_hotkey: str = "+"
+    restore_hotkey: str = "-"
+    exit_hotkey: str = "*"
+    honeypot_chance_percent: float = 1.0
+    honeypot_value: int = 500
 
     @classmethod
     def from_values(cls, coins: object, minimum: object, maximum: object,
-                    stop_grace: object = 0.25) -> RansomSettings:
+                    stop_grace: object = 0.25, trigger_hotkey: str = "+",
+                    restore_hotkey: str = "-", exit_hotkey: str = "*",
+                    honeypot_chance: object = 1.0, honeypot_value: object = 500) -> RansomSettings:
         try:
             if any(isinstance(value, bool) for value in (coins, minimum, maximum, stop_grace)):
                 raise ValueError
@@ -35,11 +44,25 @@ class RansomSettings:
             raise ValueError("Intervals must be 1-86400 seconds, with minimum <= maximum.")
         if not 0 <= grace <= 5:
             raise ValueError("STOP grace must be 0-5 seconds.")
-        return cls(int(coin_number), lo, hi, grace)
+        validate_bindings(trigger_hotkey, restore_hotkey, exit_hotkey)
+        try:
+            if isinstance(honeypot_chance, bool) or isinstance(honeypot_value, bool):
+                raise ValueError
+            chance, value = float(honeypot_chance), float(honeypot_value)
+            if not math.isfinite(chance) or not 0 <= chance <= 100:
+                raise ValueError
+            if not math.isfinite(value) or not value.is_integer() or not 1 <= value <= 9990:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError("Honeypot chance must be 0-100%. Payment must be a whole number, 1-9990.") from None
+        return cls(int(coin_number), lo, hi, grace, trigger_hotkey, restore_hotkey,
+                   exit_hotkey, chance, int(value))
 
     def validated(self) -> RansomSettings:
         return self.from_values(self.required_coins, self.min_spawn_seconds,
-                                self.max_spawn_seconds, self.stop_grace_seconds)
+                                self.max_spawn_seconds, self.stop_grace_seconds,
+                                self.trigger_hotkey, self.restore_hotkey, self.exit_hotkey,
+                                self.honeypot_chance_percent, self.honeypot_value)
 
 
 DEFAULT_SETTINGS = RansomSettings()
@@ -70,6 +93,8 @@ def load_settings(path: Path | None = None) -> RansomSettings:
         return RansomSettings.from_values(
             data["required_coins"], data["min_spawn_seconds"], data["max_spawn_seconds"],
             data.get("stop_grace_seconds", DEFAULT_SETTINGS.stop_grace_seconds),
+            data.get("trigger_hotkey", "+"), data.get("restore_hotkey", "-"), data.get("exit_hotkey", "*"),
+            data.get("honeypot_chance_percent", 1.0), data.get("honeypot_value", 500),
         )
     except (json.JSONDecodeError, KeyError):
         raise ValueError("Invalid settings file. Check the values and save again.") from None
