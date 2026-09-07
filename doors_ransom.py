@@ -1930,7 +1930,7 @@ class RansomSimulator:
             self.note_window.geometry(f"{self.NOTE_WIDTH}x{self.NOTE_HEIGHT}+{x}+{y}")
         except tk.TclError:
             return
-        self._later(16, self._animate_note_jitter)
+        self._later(250, self._animate_note_jitter) # equals to 240 bpm
 
     def _move_note_window(self) -> None:
         if self.stage != "ransom" or not self._window_exists(self.note_window):
