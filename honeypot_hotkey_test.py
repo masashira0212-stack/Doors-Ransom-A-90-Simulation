@@ -38,8 +38,14 @@ class NewSettingsTests(unittest.TestCase):
         self.assertEqual(capture_binding(SimpleNamespace(keycode=117, state=0)), "F6")
         self.assertEqual(capture_binding(SimpleNamespace(keycode=187, state=1)), "Shift+Equals")
         self.assertEqual(capture_binding(SimpleNamespace(keycode=71, state=0x20000)), "Alt+G")
+        self.assertEqual(capture_binding(SimpleNamespace(keycode=106, state=0x20000)), "Alt+NumMultiply")
         self.assertIsNone(capture_binding(SimpleNamespace(keycode=16, state=1)))
         self.assertEqual(binding_combinations("Ctrl+Shift+G"), ((6, 71),))
+        self.assertEqual(binding_combinations("Alt+NumMultiply"), ((1, 106),))
+        self.assertEqual(
+            command_hotkeys(replace(DEFAULT_SETTINGS, exit_hotkey="Alt+NumMultiply"))[0x5257],
+            ("exit", 0x4001, 106),
+        )
 
     def test_settings_buttons(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -146,7 +152,7 @@ class CollectibleTests(unittest.TestCase):
 
 
 class NativeHotkeyTests(unittest.TestCase):
-    def test_settings_focus_releases_existing_keys(self):
+    def test_settings_focus_pauses_actions_except_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = tk.Tk()
             root.withdraw()
@@ -157,12 +163,23 @@ class NativeHotkeyTests(unittest.TestCase):
             try:
                 self.assertTrue(app.global_hotkey_ready.wait(2))
                 root.update()
+                app.settings = replace(app.settings, exit_hotkey="Alt+NumMultiply")
+                app._sync_global_hotkeys()
+                wait_until(root, lambda: 0x5257 in app.global_hotkey_registered_ids)
                 settings_root.focus_force()
                 root.update()
                 if not settings_has_focus():
                     self.skipTest("Windows foreground lock prevents this interactive focus test")
-                wait_until(root, lambda: not app.global_hotkey_registered_ids)
-                check_available(DEFAULT_SETTINGS)
+                expected_exit_ids = {
+                    command_id for command_id, row in app.global_hotkeys.items()
+                    if row[0] == "exit"
+                }
+                wait_until(root, lambda: app.global_hotkey_registered_ids == expected_exit_ids)
+                # Exit must still be routed while the editor owns focus; this
+                # is the path used by Alt+NumMultiply (Alt+*) too.
+                with patch.object(app, "quit_app") as quit_app:
+                    app.global_hotkey_events.put((app.global_hotkey_revision, "exit"))
+                    wait_until(root, lambda: quit_app.call_count == 1)
                 editor.begin_capture("trigger")
                 root.update()
                 editor.hotkey_buttons["trigger"].event_generate("<KeyPress-F6>")
@@ -170,7 +187,7 @@ class NativeHotkeyTests(unittest.TestCase):
                 self.assertEqual(editor.hotkeys["trigger"].get(), "F6")
                 self.assertIsNone(editor.capturing)
                 settings_root.destroy()
-                wait_until(root, lambda: app.global_hotkey_registered_ids == set(DEFAULT_COMMAND_HOTKEYS))
+                wait_until(root, lambda: app.global_hotkey_registered_ids == set(app.global_hotkeys))
             finally:
                 if settings_root.winfo_exists():
                     settings_root.destroy()
@@ -207,7 +224,15 @@ class NativeHotkeyTests(unittest.TestCase):
                     run.assert_called_with(command)
                 focus.return_value = True
                 app._sync_global_hotkeys()
-                wait_until(root, lambda: not app.global_hotkey_registered_ids)
+                expected_exit_ids = {
+                    command_id for command_id, row in expected.items()
+                    if row[0] == "exit"
+                }
+                wait_until(root, lambda: app.global_hotkey_registered_ids == expected_exit_ids)
+                with patch.object(app, "_run_command") as run:
+                    app.global_hotkey_events.put((app.global_hotkey_revision, "exit"))
+                    wait_until(root, lambda: run.call_count == 1)
+                    run.assert_called_once_with("exit")
                 focus.return_value = False
                 app._sync_global_hotkeys()
                 wait_until(root, lambda: app.global_hotkey_registered_ids == set(expected))

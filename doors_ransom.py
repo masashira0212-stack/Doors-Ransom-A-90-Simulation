@@ -563,7 +563,16 @@ class RansomSimulator:
                 for command_id in tuple(self.global_hotkey_registered_ids):
                     user32.UnregisterHotKey(None, command_id)
                 self.global_hotkey_registered_ids.clear()
-                bindings = {} if self.global_hotkey_suspended else dict(self.global_hotkeys)
+                # Trigger and Restore are paused while the settings window owns
+                # focus, so key selection cannot alter an encounter.  Exit must
+                # stay available even then: it is the user's always-on way out.
+                bindings = dict(self.global_hotkeys)
+                if self.global_hotkey_suspended:
+                    bindings = {
+                        command_id: hotkey
+                        for command_id, hotkey in bindings.items()
+                        if hotkey[0] == "exit"
+                    }
                 revision = self.global_hotkey_revision
                 available = set()
                 for command_id, (command, modifiers, virtual_key) in bindings.items():
@@ -584,10 +593,12 @@ class RansomSimulator:
                 if message.message == WM_HOTKEY_UPDATE:
                     bindings, revision = rebind()
                     continue
-                if message.message != WM_HOTKEY or self.global_hotkey_suspended:
+                if message.message != WM_HOTKEY:
                     continue
                 hotkey = bindings.get(int(message.wParam))
                 if hotkey is not None and int(message.wParam) in self.global_hotkey_registered_ids:
+                    if self.global_hotkey_suspended and hotkey[0] != "exit":
+                        continue
                     actual_key = (int(message.lParam) >> 16) & 0xFFFF
                     actual_modifiers = int(message.lParam) & 0xF
                     if (actual_modifiers, actual_key) == (hotkey[1] & 0xF, hotkey[2]):
@@ -622,7 +633,9 @@ class RansomSimulator:
                 revision, command = self.global_hotkey_events.get_nowait()
             except queue.Empty:
                 break
-            if self.global_hotkey_suspended or revision != self.global_hotkey_revision:
+            if revision != self.global_hotkey_revision:
+                continue
+            if self.global_hotkey_suspended and command != "exit":
                 continue
             self._run_command(command)
             if self._closing:

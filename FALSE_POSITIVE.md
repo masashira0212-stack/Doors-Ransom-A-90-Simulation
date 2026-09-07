@@ -18,8 +18,10 @@ reproduced. `security_behavior_test.py` prevents these limits from accidentally
 being broadened.
 
 The settings editor captures a key only while its own key-selection control
-is focused. Command registrations are temporarily released while that editor
-has focus, then restored. Settings are stored locally; no keystrokes are logged.
+is focused. Trigger and Restore registrations are temporarily released while
+that editor has focus, then restored; the selected Exit registration remains
+available so the user can always close the app, including with `Alt+*`.
+Settings are stored locally; no keystrokes are logged.
 The 2026-09-07 investigation is recorded in
 [DETECTION_REVIEW_2026-09-07.md](DETECTION_REVIEW_2026-09-07.md).
 

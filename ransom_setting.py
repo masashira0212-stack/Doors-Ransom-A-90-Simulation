@@ -69,7 +69,7 @@ class SettingsWindow:
             self.hotkey_buttons[name] = button
         ttk.Button(body, text="Reset hotkeys", command=self.reset_hotkeys).grid(
             row=9, column=1, sticky="e", pady=4)
-        ttk.Label(body, text="Click a hotkey button, then press a key.\nCtrl / Alt / Shift combinations are supported.\nHotkeys pause while this window is focused.\n\n10 coins or less: end after Downloading.\nNormal coins pay 10. Chance is per spawned coin.").grid(
+        ttk.Label(body, text="Click a hotkey button, then press a key.\nCtrl / Alt / Shift combinations are supported.\nTrigger and Restore pause here; Exit stays available.\n\n10 coins or less: end after Downloading.\nNormal coins pay 10. Chance is per spawned coin.").grid(
             row=10, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.status_label = ttk.Label(body, textvariable=self.status, justify="left", anchor="w", wraplength=330, width=47)
         self.status_label.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(8, 10))
