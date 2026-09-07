@@ -6,6 +6,7 @@ import math
 import os
 import queue
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -15,9 +16,11 @@ from typing import Any, Callable
 
 import tkinter as tk
 import tkinter.font as tkfont
+from tkinter import ttk
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
-from ransom_config import DEFAULT_SETTINGS, default_settings_path, load_settings, settings_signature
+from ransom_config import (DEFAULT_SETTINGS, default_settings_path,
+                           failure_command_arguments, load_settings, settings_signature)
 from ransom_hotkeys import (DEFAULT_COMMAND_HOTKEYS, command_hotkeys,
                             event_combination, settings_has_focus)
 
@@ -56,9 +59,17 @@ USER_SOUND_NAMES = (
 )
 SOUND_NAMES = SYNTH_SOUND_NAMES + USER_SOUND_NAMES
 MUSIC_NAME = "ransom_ost_to_jumpscare.mp3"
-# Play the original compressed source from its late section. Its supplied final
-# jump begins at 101.55s, exactly 90 seconds after this seek point.
-MUSIC_START_SECONDS = 11.55
+# The supplied final jump starts at 101.55 seconds. The timer setting is kept
+# below this point so the music can always start at a later position and land
+# that jump exactly when TIME reaches 00:00.
+MUSIC_FINAL_JUMP_SECONDS = 101.55
+
+
+def music_start_seconds(ransom_seconds: float) -> float:
+    return max(0.0, MUSIC_FINAL_JUMP_SECONDS - float(ransom_seconds))
+
+
+MUSIC_START_SECONDS = music_start_seconds(DEFAULT_SETTINGS.ransom_seconds)
 TRANSPARENT_KEY = "#010203"
 RANSOM_FONT_BOLD = "Roboto Mono SemiBold"
 RANSOM_FONT_MEDIUM = "Roboto Mono Medium"
@@ -311,9 +322,6 @@ class RansomSimulator:
     COIN_VALUE = 10
     COIN_HITBOX_PADDING = 36
     COIN_POPUP_BOUNCE = 0.78
-    # Direct pointer sampling removes stale-motion jitter; 60fps is enough to
-    # feel smooth without needlessly moving a native top-level window.
-    COIN_DRAG_FRAME_MS = 16
     COIN_RETIRE_DELAY_MS = 24
     MAX_GLITCH_WINDOWS = 5
     MAX_COIN_WINDOWS = 8
@@ -371,6 +379,7 @@ class RansomSimulator:
                 self.settings_error = str(error)
         self.STARTING_BALANCE = self.settings.required_coins
         self.REACTION_ARM_DELAY_MS = round(self.settings.stop_grace_seconds * 1000)
+        self.current_ransom_seconds = self.settings.ransom_seconds
         # A one-element Tcl list preserves cursor paths containing spaces.
         # This replaces the native pointer only over our own widgets; Windows'
         # cursor scheme is never edited and there is no second pointer window.
@@ -418,6 +427,7 @@ class RansomSimulator:
         self.overlay: tk.Toplevel | None = None
         self.overlay_canvas: tk.Canvas | None = None
         self.intro_window: tk.Toplevel | None = None
+        self.startup_window: tk.Toplevel | None = None
         self.intro_sequence_id = 0
         self.intro_visible_since = 0.0
         self.intro_deadline = 0.0
@@ -440,6 +450,7 @@ class RansomSimulator:
         self.glitch_window_target = 5
         self.coin_windows: dict[int, dict[str, Any]] = {}
         self.retiring_coin_windows: list[dict[str, Any]] = []
+        self.ransom_stack_repair_deferred = False
         self.face_flash_windows: list[dict[str, Any]] = []
         self.next_coin_id = 1
         self.photos: dict[str, ImageTk.PhotoImage] = {}
@@ -451,6 +462,7 @@ class RansomSimulator:
         self.pointer_outside_samples = 0
         self.attack_deadline = 0.0
         self.failure_deadline = 0.0
+        self.failure_command_executed = False
         self.pointer_origin = (0, 0)
         self.balance = self.STARTING_BALANCE
         self.ransom_deadline = 0.0
@@ -508,6 +520,66 @@ class RansomSimulator:
         self._poll_waiting_deadline()
 
     # ---------- controller ----------
+
+    def show_startup_popup(self) -> None:
+        """Show the normal-launch guide without making it a control lockout."""
+        if self._closing or self._window_exists(self.startup_window):
+            return
+        window = tk.Toplevel(self.root)
+        self.startup_window = window
+        window.title("ransom.exe started")
+        window.resizable(False, False)
+        try:
+            window.iconbitmap(default=str(ASSET_DIR / "ransom.ico"))
+        except tk.TclError:
+            pass
+        window.protocol("WM_DELETE_WINDOW", self._dismiss_startup_popup)
+        # Keep this guide visually consistent with ransom_setting: compact
+        # default Windows controls, no fullscreen styling or themed graphics.
+        body = ttk.Frame(window, padding=12)
+        body.grid(sticky="nsew")
+        ttk.Label(body, text="ransom.exe started").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(
+            body,
+            text=(
+                "You may close this guide. Ransom stays armed and your hotkeys stay available.\n"
+                "Only Exit app closes ransom.exe. This visual simulator does not change Windows files or settings."
+            ),
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 10))
+        for label, binding, action in (
+            ("Show encounter", self.settings.trigger_hotkey, self._trigger_test_hotkey),
+            ("Restore desktop", self.settings.restore_hotkey, self.restore_and_continue),
+            ("Exit app", self.settings.exit_hotkey, self.quit_app),
+        ):
+            row = body.grid_size()[1]
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+            ttk.Button(body, text=binding, command=action, width=12).grid(row=row, column=1, sticky="ew", pady=3)
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Close guide", command=self._dismiss_startup_popup).pack(side="left", padx=(0, 6))
+        ttk.Button(buttons, text="Exit app", command=self.quit_app).pack(side="left")
+        window.update_idletasks()
+        width, height = window.winfo_reqwidth(), window.winfo_reqheight()
+        window.geometry(f"+{max(0, (window.winfo_screenwidth() - width) // 2)}+{max(0, (window.winfo_screenheight() - height) // 2)}")
+        window.lift()
+        window.focus_force()
+
+    def _dismiss_startup_popup(self) -> None:
+        window = self.startup_window
+        self.startup_window = None
+        self._destroy_window(window)
+
+    def _popup_scale_factor(self) -> float:
+        active = (
+            getattr(self, "encounter_settings", self.settings)
+            if getattr(self, "stage", "idle") == "ransom"
+            else self.settings
+        )
+        return active.popup_scale_percent / 100.0
+
+    def _scaled_popup_size(self, value: int, minimum: int = 1) -> int:
+        return max(minimum, round(value * self._popup_scale_factor()))
 
     def _start_global_command_listener(self) -> None:
         """Register only the three user-selected commands on Windows.
@@ -992,7 +1064,7 @@ class RansomSimulator:
         # as the immediate plus-key test path.
         self.audio.reopen()
         self.audio.stop_channel("loop")
-        size = min(250, max(180, self.screen_height // 4))
+        size = self._scaled_popup_size(min(250, max(180, self.screen_height // 4)), minimum=96)
 
         window = tk.Toplevel(self.root)
         self.intro_window = window
@@ -1136,7 +1208,7 @@ class RansomSimulator:
         self._create_overlay()
         if self.overlay_canvas is None or self.overlay is None:
             return
-        face_size = min(320, max(220, self.screen_height // 3))
+        face_size = self._scaled_popup_size(min(320, max(220, self.screen_height // 3)), minimum=120)
         face = self._photo("ransom_face.png", (face_size, face_size))
         self.overlay_canvas.create_image(
             self.screen_width // 2,
@@ -1164,7 +1236,7 @@ class RansomSimulator:
         )
         self.overlay_canvas.tag_lower("stop_background")
         self.overlay_canvas.itemconfigure("entity", state="hidden")
-        stop_size = min(420, max(300, int(self.screen_height * 0.38)))
+        stop_size = self._scaled_popup_size(min(420, max(300, int(self.screen_height * 0.38))), minimum=160)
         stop_photo = self._photo("stop_reference.png", (stop_size, stop_size))
         self.overlay_canvas.create_image(
             self.screen_width // 2,
@@ -1439,7 +1511,8 @@ class RansomSimulator:
     def _fit_note_to_screen(self) -> None:
         """Fit the 315:185 note to the current work area, including its frame."""
         left, top, right, bottom = self._primary_work_area()
-        self.note_scale = max(0.1, min(1.0, (right - left - 32) / 945, (bottom - top - 64) / 555))
+        maximum = min((right - left - 32) / 945, (bottom - top - 64) / 555)
+        self.note_scale = max(0.1, min(self._popup_scale_factor(), maximum))
         self.NOTE_WIDTH = max(1, round(945 * self.note_scale))
         self.NOTE_HEIGHT = max(1, round(555 * self.note_scale))
 
@@ -1452,6 +1525,9 @@ class RansomSimulator:
         self._destroy_overlay()
         self.stage = "ransom"
         self.encounter_settings = self.settings
+        self.current_ransom_seconds = self.encounter_settings.ransom_seconds
+        self.failure_command_executed = False
+        self.ransom_stack_repair_deferred = False
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         self._fit_note_to_screen()
@@ -1460,12 +1536,12 @@ class RansomSimulator:
         if self.enable_shell_effects and self.system_effects_active:
             self._create_visual_shell_overlays()
         self.balance = self.STARTING_BALANCE
-        self.ransom_deadline = time.monotonic() + self.RANSOM_SECONDS
+        self.ransom_deadline = time.monotonic() + self.current_ransom_seconds
         coin_count = self.STARTING_BALANCE // self.COIN_VALUE
         self.status_var.set(
             f"RANSOM進行中：コインを{coin_count}枚ドラッグ／投げて支払う（-で復元）"
         )
-        self.audio.play_music(MUSIC_NAME, start=MUSIC_START_SECONDS)
+        self.audio.play_music(MUSIC_NAME, start=music_start_seconds(self.current_ransom_seconds))
         self.glitch_window_target = self.rng.choice((4, 5))
         for index in range(self.glitch_window_target):
             self._create_glitch_window(index)
@@ -1495,7 +1571,7 @@ class RansomSimulator:
     def _flash_random_face(self) -> None:
         if self.stage != "ransom":
             return
-        size = self.rng.randint(58, 108)
+        size = self._scaled_popup_size(self.rng.randint(58, 108), minimum=30)
         x = self.rng.randint(0, max(0, self.screen_width - size))
         y = self.rng.randint(0, max(0, self.screen_height - size))
         self._create_face_flash("screen", x, y, size)
@@ -1504,7 +1580,7 @@ class RansomSimulator:
     def _flash_desktop_face(self) -> None:
         if self.stage != "ransom":
             return
-        size = self.rng.randint(48, 72)
+        size = self._scaled_popup_size(self.rng.randint(48, 72), minimum=28)
         rows = max(1, (self.screen_height - 58) // 82)
         max_columns = max(1, min(4, self.screen_width // 92))
         column = self.rng.randrange(max_columns)
@@ -1706,7 +1782,7 @@ class RansomSimulator:
         if self.stage != "ransom":
             return
         image_name = f"glitch_{self.rng.randint(1, 6)}.png"
-        width = self.rng.randint(240, 420)
+        width = self._scaled_popup_size(self.rng.randint(240, 420), minimum=120)
         height = self.rng.randint(round(width * 0.56), round(width * 0.70))
         x = self.rng.randint(0, max(0, self.screen_width - width - 20))
         y = self.rng.randint(20, max(20, self.screen_height - height - 60))
@@ -1831,7 +1907,7 @@ class RansomSimulator:
         canvas.create_image(p(97), p(163.5), image=coin)
         canvas.create_text(p(128), p(163.5), text="TIME:", anchor="w",
                            fill="#000000", font=font(bold, 24))
-        self.time_item = canvas.create_text(p(299), p(163.5), text=format_clock(self.RANSOM_SECONDS),
+        self.time_item = canvas.create_text(p(299), p(163.5), text=format_clock(self.current_ransom_seconds),
                                             anchor="e", fill="#000000", font=font(bold, 24))
         window.update_idletasks()
         self._clamp_window_to_work_area(window, margin=12)
@@ -1896,7 +1972,8 @@ class RansomSimulator:
             coin_id = self.next_coin_id
             self.next_coin_id += 1
             asset, value = self._choose_collectible()
-            size = self.rng.randint(78, 90) if asset == "honeypot.png" else self.rng.randint(58, 72)
+            base_size = self.rng.randint(78, 90) if asset == "honeypot.png" else self.rng.randint(58, 72)
+            size = self._scaled_popup_size(base_size, minimum=30)
             x, y = self._coin_position(size)
             key_color = "#010203"
             window = tk.Toplevel(self.root)
@@ -1944,6 +2021,7 @@ class RansomSimulator:
                 "drag_target_x": float(x),
                 "drag_target_y": float(y),
                 "drag_animation_pending": False,
+                "drag_apply_pending": False,
                 "drag_samples": [],
                 "velocity_x": 0.0,
                 "velocity_y": 0.0,
@@ -1952,8 +2030,12 @@ class RansomSimulator:
                 "expires": time.monotonic() + self.rng.uniform(3.8, 5.8),
             }
             canvas.bind("<ButtonPress-1>", lambda event, cid=coin_id: self._begin_coin_drag(cid, event))
+            canvas.bind("<B1-Motion>", lambda event, cid=coin_id: self._queue_coin_drag_motion(cid, event))
             canvas.bind("<ButtonRelease-1>", lambda event, cid=coin_id: self._release_coin(cid, event))
-            self._repair_ransom_visibility()
+            if self._has_active_coin_drag():
+                self.ransom_stack_repair_deferred = True
+            else:
+                self._repair_ransom_visibility()
             self._later(self.rng.randint(3800, 5800), lambda cid=coin_id: self._expire_coin(cid))
         self._later(self.rng.randint(380, 760), self._spawn_coin)
 
@@ -1986,6 +2068,7 @@ class RansomSimulator:
         # opaque red backdrop could win one compositor frame. Hide its canvas
         # now, release capture, then destroy it after the input message ends.
         self._retire_collected_coin(record)
+        self.ransom_stack_repair_deferred = False
         self.balance = max(0, self.balance - int(record.get("value", self.COIN_VALUE)))
         self.audio.play("coin.wav", channel="coin")
         if self.note_canvas is not None and self.balance_item is not None:
@@ -2012,6 +2095,7 @@ class RansomSimulator:
         record["drag_target_x"] = float(record["x"])
         record["drag_target_y"] = float(record["y"])
         record["drag_animation_pending"] = True
+        record["drag_apply_pending"] = False
         pointer_x = float(getattr(event, "x_root", window.winfo_pointerx()))
         pointer_y = float(getattr(event, "y_root", window.winfo_pointery()))
         record["drag_offset_x"] = pointer_x - float(record["x"])
@@ -2020,10 +2104,12 @@ class RansomSimulator:
         try:
             record["canvas"].configure(cursor=self.minigame_cursor)
             record["canvas"].grab_set()
-            self._raise_without_activation(window)
         except tk.TclError:
             pass
         generation = record["motion_generation"]
+        # This one immediate sample preserves drag-to-pay for callers that
+        # create a synthetic press. Normal pointer movement is handled by the
+        # coalesced <B1-Motion> path below, not a permanent 60fps poll.
         self._later(0, lambda cid=coin_id, token=generation: self._animate_coin_drag(cid, token))
 
     def _coin_pointer_position(self) -> tuple[float, float]:
@@ -2032,6 +2118,60 @@ class RansomSimulator:
         # otherwise feed the previous window position back into the next move.
         x, y = self.root.winfo_pointerxy()
         return float(x), float(y)
+
+    @staticmethod
+    def _remember_coin_drag_sample(record: dict[str, Any], pointer_x: float, pointer_y: float) -> None:
+        now = time.monotonic()
+        samples = record["drag_samples"] + [(now, pointer_x, pointer_y)]
+        record["drag_samples"] = [sample for sample in samples[-24:] if now - sample[0] <= 0.18]
+
+    def _set_coin_drag_target(
+        self,
+        record: dict[str, Any],
+        pointer_x: float,
+        pointer_y: float,
+    ) -> None:
+        x, y = self._clamp_coin_position(
+            pointer_x - float(record["drag_offset_x"]),
+            pointer_y - float(record["drag_offset_y"]),
+            int(record["size"]),
+        )
+        record["drag_target_x"], record["drag_target_y"] = x, y
+        self._remember_coin_drag_sample(record, pointer_x, pointer_y)
+
+    def _queue_coin_drag_motion(self, coin_id: int, event: tk.Event) -> str | None:
+        """Coalesce pointer events so dragging does at most one native move per Tk turn."""
+        record = self.coin_windows.get(coin_id)
+        if self.stage != "ransom" or record is None or not record["dragging"]:
+            return None
+        pointer_x = float(getattr(event, "x_root", record["window"].winfo_pointerx()))
+        pointer_y = float(getattr(event, "y_root", record["window"].winfo_pointery()))
+        self._set_coin_drag_target(record, pointer_x, pointer_y)
+        if record["drag_apply_pending"]:
+            return "break"
+        record["drag_apply_pending"] = True
+        generation = record["motion_generation"]
+        self.root.after_idle(lambda cid=coin_id, token=generation: self._apply_coin_drag_target(cid, token))
+        return "break"
+
+    def _apply_coin_drag_target(self, coin_id: int, generation: int) -> None:
+        record = self.coin_windows.get(coin_id)
+        if record is not None:
+            record["drag_apply_pending"] = False
+        if (
+            self.stage != "ransom"
+            or record is None
+            or not record["dragging"]
+            or generation != record["motion_generation"]
+        ):
+            return
+        x, y = float(record["drag_target_x"]), float(record["drag_target_y"])
+        moved = round(x) != round(float(record["x"])) or round(y) != round(float(record["y"]))
+        record["x"], record["y"] = x, y
+        if moved:
+            self._move_coin_window(record, x, y)
+        if moved and record["user_armed"] and self._coin_hits_note(record):
+            self._collect_coin(coin_id)
 
     def _animate_coin_drag(self, coin_id: int, generation: int) -> None:
         record = self.coin_windows.get(coin_id)
@@ -2042,21 +2182,10 @@ class RansomSimulator:
             or generation != record["motion_generation"]
         ):
             return
+        record["drag_animation_pending"] = False
         pointer_x, pointer_y = self._coin_pointer_position()
-        x, y = self._clamp_coin_position(pointer_x - record["drag_offset_x"],
-                                          pointer_y - record["drag_offset_y"], int(record["size"]))
-        record["drag_target_x"], record["drag_target_y"] = x, y
-        now = time.monotonic()
-        samples = record["drag_samples"] + [(now, pointer_x, pointer_y)]
-        record["drag_samples"] = [sample for sample in samples[-24:] if now - sample[0] <= 0.18]
-        moved = round(x) != round(float(record["x"])) or round(y) != round(float(record["y"]))
-        record["x"], record["y"] = x, y
-        if moved:
-            self._move_coin_window(record, x, y)
-        if moved and record["user_armed"] and self._coin_hits_note(record):
-            self._collect_coin(coin_id)
-            return
-        self._later(self.COIN_DRAG_FRAME_MS, lambda cid=coin_id, token=generation: self._animate_coin_drag(cid, token))
+        self._set_coin_drag_target(record, pointer_x, pointer_y)
+        self._apply_coin_drag_target(coin_id, generation)
 
     def _release_coin(self, coin_id: int, event: tk.Event) -> None:
         record = self.coin_windows.get(coin_id)
@@ -2074,10 +2203,16 @@ class RansomSimulator:
         release_y = pointer_y - float(record["drag_offset_y"])
         release_x, release_y = self._clamp_coin_position(release_x, release_y, int(record["size"]))
         record["drag_target_x"], record["drag_target_y"] = release_x, release_y
+        moved = (
+            round(release_x) != round(float(record["x"]))
+            or round(release_y) != round(float(record["y"]))
+        )
         record["x"], record["y"] = release_x, release_y
-        self._move_coin_window(record, release_x, release_y)
+        if moved:
+            self._move_coin_window(record, release_x, release_y)
         record["dragging"] = False
         record["drag_animation_pending"] = False
+        record["drag_apply_pending"] = False
         try:
             record["canvas"].configure(cursor=self.minigame_cursor)
             record["canvas"].grab_release()
@@ -2098,6 +2233,11 @@ class RansomSimulator:
         if record["user_armed"] and self._coin_hits_note(record):
             self._collect_coin(coin_id)
             return
+        # Deferred while the mouse was captured: repair only after the drag
+        # releases so the game windows cannot flash beneath the backdrop.
+        if self.ransom_stack_repair_deferred:
+            self.ransom_stack_repair_deferred = False
+            self._repair_ransom_visibility()
         if record["moving"]:
             self._later(16, lambda cid=coin_id, token=generation: self._animate_coin_motion(cid, token))
 
@@ -2261,6 +2401,7 @@ class RansomSimulator:
     def _retire_collected_coin(self, record: dict[str, Any]) -> None:
         record["dragging"] = False
         record["moving"] = False
+        record["drag_apply_pending"] = False
         record["motion_generation"] += 1
         try:
             if self.root.grab_current() is record["canvas"]:
@@ -2284,6 +2425,7 @@ class RansomSimulator:
         record = self.coin_windows.pop(coin_id, None)
         if record:
             record["dragging"] = False
+            record["drag_apply_pending"] = False
             record["motion_generation"] += 1
             try:
                 if self.root.grab_current() is record["canvas"]:
@@ -2291,7 +2433,9 @@ class RansomSimulator:
             except tk.TclError:
                 pass
             self._destroy_window(record.get("window"))
-            if repair_stack:
+            if repair_stack and self._has_active_coin_drag():
+                self.ransom_stack_repair_deferred = True
+            elif repair_stack:
                 self._repair_ransom_visibility()
 
     def _update_ransom_clock(self) -> None:
@@ -2605,7 +2749,37 @@ class RansomSimulator:
             self.audio.play("failure.wav")
         self._destroy_ransom_windows()
         self._create_overlay()
+        self._run_failure_command()
         self._animate_failure(0)
+
+    def _run_failure_command(self) -> None:
+        """Start the player's explicit failure action once, without a shell."""
+        if self.failure_command_executed:
+            return
+        self.failure_command_executed = True
+        settings = getattr(self, "encounter_settings", self.settings)
+        try:
+            arguments = failure_command_arguments(settings.failure_command)
+        except ValueError as error:
+            self.status_var.set(f"失敗時コマンドを実行できません: {error}")
+            return
+        if not arguments:
+            return
+        executable = Path(arguments[0])
+        if not executable.is_file():
+            self.status_var.set("失敗時コマンドを実行できません: 指定された .exe が見つかりません")
+            return
+        try:
+            subprocess.Popen(
+                arguments,
+                executable=str(executable),
+                cwd=str(executable.parent),
+                shell=False,
+                close_fds=True,
+            )
+            self.status_var.set(f"失敗時コマンドを実行しました: {executable.name}")
+        except OSError as error:
+            self.status_var.set(f"失敗時コマンドを実行できません: {error}")
 
     def _animate_failure(self, frame: int) -> None:
         if self.stage != "failure" or self.overlay_canvas is None:
@@ -2830,6 +3004,9 @@ class RansomSimulator:
         user32.SetWindowPos(self._native_window_handle(window), ctypes.c_void_p(-1),
                            0, 0, 0, 0, 0x0213)  # NOSIZE|NOMOVE|NOACTIVATE|NOOWNERZORDER
 
+    def _has_active_coin_drag(self) -> bool:
+        return any(record.get("dragging", False) for record in self.coin_windows.values())
+
     def _ransom_layer_windows(self) -> list[tk.Toplevel]:
         """Return this app's visible layers from back to front."""
         groups = [
@@ -2863,6 +3040,14 @@ class RansomSimulator:
         activate windows, operate on another process, or revive a finished game.
         """
         if self.stage != "ransom" or self._closing:
+            return
+        # Starting a native drag used to raise the coin, then the watchdog
+        # immediately rebuilt every RANSOM window's order.  That race caused a
+        # one-frame flash of the red backdrop and competed with pointer moves.
+        # The drag itself never changes the layer order, so defer repairs until
+        # the mouse is released or the coin is paid.
+        if self._has_active_coin_drag():
+            self.ransom_stack_repair_deferred = True
             return
         try:
             controls = [r["window"] for r in self.glitch_windows]
@@ -3681,6 +3866,7 @@ class RansomSimulator:
         if self.bridge_result_path is not None and not self.bridge_result_written:
             self._write_bridge_result("cancelled")
         self._closing = True
+        self._dismiss_startup_popup()
         self._cancel_callbacks()
         self._stop_global_command_listener()
         for callback_id in self.preparation_after_ids:
@@ -3890,6 +4076,9 @@ def main() -> int:
         # fallback could not help. Arm synchronously before the main loop;
         # all actual encounter work still happens later on Tk's timer.
         simulator.arm()
+        # A regular launch starts hidden so the encounter can arrive later, but
+        # it must still make its state and escape controls obvious right away.
+        root.after_idle(simulator.show_startup_popup)
     root.mainloop()
     return 0
 

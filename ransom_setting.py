@@ -34,6 +34,9 @@ class SettingsWindow:
         self.stop_grace = tk.StringVar()
         self.honeypot_chance = tk.StringVar()
         self.honeypot_value = tk.StringVar()
+        self.ransom_seconds = tk.StringVar()
+        self.popup_scale_percent = tk.StringVar()
+        self.failure_command = tk.StringVar()
         self.hotkeys = {name: tk.StringVar() for name in ("trigger", "restore", "exit")}
         self.hotkey_buttons = {}
         self.capturing: str | None = None
@@ -58,9 +61,18 @@ class SettingsWindow:
         ttk.Label(body, text="Honeypot payment (coins)").grid(row=5, column=0, sticky="w")
         ttk.Spinbox(body, from_=1, to=9990, increment=10, textvariable=self.honeypot_value,
                     width=12).grid(row=5, column=1, sticky="ew", pady=4)
+        ttk.Label(body, text="Ransom timer (seconds)").grid(row=6, column=0, sticky="w")
+        ttk.Spinbox(body, from_=10, to=100, increment=1, textvariable=self.ransom_seconds,
+                    width=12).grid(row=6, column=1, sticky="ew", pady=4)
+        ttk.Label(body, text="Popup scale (%)").grid(row=7, column=0, sticky="w")
+        ttk.Spinbox(body, from_=50, to=150, increment=5, textvariable=self.popup_scale_percent,
+                    width=12).grid(row=7, column=1, sticky="ew", pady=4)
+        ttk.Label(body, text="Failure command (optional)").grid(row=8, column=0, sticky="nw", pady=(6, 0))
+        self.failure_command_input = ttk.Entry(body, textvariable=self.failure_command, width=42)
+        self.failure_command_input.grid(row=8, column=1, sticky="ew", pady=(6, 4))
         for row, (name, label) in enumerate((("trigger", "Trigger encounter"),
                                            ("restore", "Restore desktop"),
-                                           ("exit", "Exit app")), start=6):
+                                           ("exit", "Exit app")), start=9):
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w")
             button = ttk.Button(body, textvariable=self.hotkeys[name],
                                 command=lambda action=name: self.begin_capture(action))
@@ -68,13 +80,21 @@ class SettingsWindow:
             button.bind("<KeyPress>", self._capture_key)
             self.hotkey_buttons[name] = button
         ttk.Button(body, text="Reset hotkeys", command=self.reset_hotkeys).grid(
-            row=9, column=1, sticky="e", pady=4)
-        ttk.Label(body, text="Click a hotkey button, then press a key.\nCtrl / Alt / Shift combinations are supported.\nTrigger and Restore pause here; Exit stays available.\n\n10 coins or less: end after Downloading.\nNormal coins pay 10. Chance is per spawned coin.").grid(
-            row=10, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            row=12, column=1, sticky="e", pady=4)
+        ttk.Label(body, text=(
+            "Click a hotkey button, then press a key.\n"
+            "Ctrl / Alt / Shift combinations are supported.\n"
+            "Trigger and Restore pause here; Exit stays available.\n\n"
+            "The 90-second default timer makes the track's final jump reach 00:00.\n"
+            "Failure command is empty by default. It runs only after timeout: direct\n"
+            "absolute .exe path plus optional arguments; no cmd/PowerShell/scripts.\n\n"
+            "10 coins or less: end after Downloading.\n"
+            "Normal coins pay 10. Chance is per spawned coin."
+        )).grid(row=13, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.status_label = ttk.Label(body, textvariable=self.status, justify="left", anchor="w", wraplength=330, width=47)
-        self.status_label.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(8, 10))
+        self.status_label.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(8, 10))
         buttons = ttk.Frame(body)
-        buttons.grid(row=12, column=0, columnspan=2, sticky="e")
+        buttons.grid(row=15, column=0, columnspan=2, sticky="e")
         ttk.Button(buttons, text="Save", command=self.save).pack(side="left", padx=(0, 6))
         ttk.Button(buttons, text="Close", command=root.destroy).pack(side="left")
         root.bind("<KeyPress>", self._window_key)
@@ -96,6 +116,9 @@ class SettingsWindow:
         self.stop_grace.set(f"{settings.stop_grace_seconds:g}")
         self.honeypot_chance.set(f"{settings.honeypot_chance_percent:g}")
         self.honeypot_value.set(str(settings.honeypot_value))
+        self.ransom_seconds.set(f"{settings.ransom_seconds:g}")
+        self.popup_scale_percent.set(str(settings.popup_scale_percent))
+        self.failure_command.set(settings.failure_command)
         for action in self.hotkeys:
             self.hotkeys[action].set(getattr(settings, action + "_hotkey"))
 
@@ -147,7 +170,8 @@ class SettingsWindow:
                                                   self.maximum.get(), self.stop_grace.get(),
                                                   self.hotkeys["trigger"].get(), self.hotkeys["restore"].get(),
                                                   self.hotkeys["exit"].get(), self.honeypot_chance.get(),
-                                                  self.honeypot_value.get())
+                                                  self.honeypot_value.get(), self.ransom_seconds.get(),
+                                                  self.popup_scale_percent.get(), self.failure_command.get())
             # Hidden self-tests do not reserve keys used by the running app.
             if self.root.winfo_viewable():
                 check_available(settings)
@@ -164,8 +188,14 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
-        with tempfile.TemporaryDirectory(prefix="ransom-setting-test-") as directory:
-            path = Path(directory) / "settings.json"
+        # TemporaryDirectory creates a private child folder that some managed
+        # Windows setups deny to subprocesses. Use a one-off path in the normal
+        # temp folder instead; save_settings still exercises its atomic replace.
+        temporary = tempfile.NamedTemporaryFile(prefix="ransom-setting-test-", suffix=".json", delete=False)
+        path = Path(temporary.name)
+        temporary.close()
+        path.unlink(missing_ok=True)
+        try:
             root = tk.Tk()
             root.withdraw()
             window = SettingsWindow(root, path)
@@ -177,6 +207,8 @@ def main() -> int:
             if window.save() or load_settings(path) != expected:
                 raise RuntimeError("Invalid settings overwrote the saved values")
             root.destroy()
+        finally:
+            path.unlink(missing_ok=True)
         return 0
     root = tk.Tk()
     SettingsWindow(root)

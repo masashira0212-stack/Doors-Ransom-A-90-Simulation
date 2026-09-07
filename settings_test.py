@@ -5,11 +5,27 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ransom_config import DEFAULT_SETTINGS, RansomSettings, load_settings, save_settings
-from doors_ransom import RansomSimulator
+from ransom_config import (DEFAULT_SETTINGS, RansomSettings, failure_command_arguments,
+                           load_settings, save_settings)
+from doors_ransom import RansomSimulator, music_start_seconds
+
+
+class SettingsPath:
+    """One disposable path in the normal temp folder for atomic-save tests."""
+
+    def __enter__(self) -> Path:
+        handle = tempfile.NamedTemporaryFile(prefix="ransom-config-", suffix=".json", delete=False)
+        self.path = Path(handle.name)
+        handle.close()
+        self.path.unlink(missing_ok=True)
+        return self.path
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        self.path.unlink(missing_ok=True)
 
 
 class ConfigTests(unittest.TestCase):
@@ -25,6 +41,22 @@ class ConfigTests(unittest.TestCase):
                        (100, 5, 20, "nan"), (100, 5, 20, True)):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 RansomSettings.from_values(*values)
+        configured = RansomSettings.from_values(
+            100, 5, 20, 0.25, "+", "-", "*", 1, 500, 75, 125,
+            '"C:\\Program Files\\Example\\game.exe" --from-ransom',
+        )
+        self.assertEqual(configured.ransom_seconds, 75)
+        self.assertEqual(configured.popup_scale_percent, 125)
+        self.assertEqual(
+            failure_command_arguments(configured.failure_command),
+            ["C:\\Program Files\\Example\\game.exe", "--from-ransom"],
+        )
+        for command in ("game.exe", "cmd.exe /c whoami", "C:\\test.bat", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -Command x"):
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                RansomSettings.from_values(100, 5, 20, failure_command=command)
+        for duration, scale in ((9, 100), (101, 100), (90, 49), (90, 151), (90, 99.5)):
+            with self.subTest(duration=duration, scale=scale), self.assertRaises(ValueError):
+                RansomSettings.from_values(100, 5, 20, ransom_seconds=duration, popup_scale_percent=scale)
 
     def test_old_settings_default_grace(self):
         with patch("ransom_config.Path.read_text", return_value=(
@@ -33,9 +65,9 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(load_settings(Path("legacy.json")), RansomSettings(100, 5, 20, 0.25))
 
     def test_atomic_save(self):
-        with tempfile.TemporaryDirectory(prefix="ransom-config-") as folder:
-            path = Path(folder) / "settings.json"
+        with SettingsPath() as path:
             self.assertEqual(load_settings(path), DEFAULT_SETTINGS)
+            before_temporary_files = set(path.parent.glob("settings-*.tmp"))
             expected = RansomSettings(100, 5, 20, 0.65)
             save_settings(expected, path)
             before = path.read_bytes()
@@ -46,11 +78,10 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     save_settings(RansomSettings(500, 45, 120), path)
             self.assertEqual(load_settings(path), expected)
-            self.assertEqual(list(path.parent.glob("*.tmp")), [])
+            self.assertEqual(set(path.parent.glob("settings-*.tmp")), before_temporary_files)
 
     def test_live_reload_and_cursor(self):
-        with tempfile.TemporaryDirectory(prefix="ransom-live-settings-") as folder:
-            path = Path(folder) / "settings.json"
+        with SettingsPath() as path:
             save_settings(RansomSettings(100, 5, 20), path)
             root = tk.Tk()
             root.withdraw()
@@ -110,6 +141,61 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(app.balance, 100)
             finally:
                 app.quit_app()
+
+    def test_failure_command_runs_once_without_shell(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = RansomSimulator(root, enable_shell_effects=False, use_saved_settings=False)
+        app.audio.set_volume(0)
+        command = f'"{Path(sys.executable)}" --version'
+        app.encounter_settings = RansomSettings.from_values(100, 5, 20, failure_command=command)
+        try:
+            with patch("doors_ransom.subprocess.Popen") as launch:
+                app._run_failure_command()
+                app._run_failure_command()
+            launch.assert_called_once()
+            args, kwargs = launch.call_args
+            self.assertEqual(args[0], [sys.executable, "--version"])
+            self.assertFalse(kwargs["shell"])
+            self.assertTrue(kwargs["close_fds"])
+            self.assertEqual(kwargs["cwd"], str(Path(sys.executable).parent))
+        finally:
+            app.quit_app()
+
+    def test_timer_music_sync_popup_scale_and_startup_guide(self):
+        self.assertAlmostEqual(music_start_seconds(90), 11.55, places=2)
+        self.assertAlmostEqual(music_start_seconds(10), 91.55, places=2)
+        self.assertAlmostEqual(music_start_seconds(100), 1.55, places=2)
+        root = tk.Tk()
+        root.withdraw()
+        app = RansomSimulator(root, enable_shell_effects=False, use_saved_settings=False)
+        app.audio.set_volume(0)
+        try:
+            app.settings = RansomSettings.from_values(100, 5, 20, ransom_seconds=75, popup_scale_percent=50)
+            app.stage = "ransom"
+            app.encounter_settings = app.settings
+            app._fit_note_to_screen()
+            self.assertEqual(app.current_ransom_seconds, 90)
+            self.assertLessEqual(app.note_scale, 0.5)
+            app.show_startup_popup()
+            root.update()
+            self.assertTrue(app._window_exists(app.startup_window))
+            def collect_text(widget: tk.Misc) -> list[str]:
+                values: list[str] = []
+                if "text" in widget.keys():
+                    values.append(str(widget.cget("text")))
+                for child in widget.winfo_children():
+                    values.extend(collect_text(child))
+                return values
+
+            text = "\n".join(collect_text(app.startup_window))
+            self.assertIn("ransom.exe started", text)
+            self.assertIn(app.settings.exit_hotkey, text)
+            app._dismiss_startup_popup()
+            self.assertFalse(app._closing)
+            self.assertFalse(app._window_exists(app.startup_window))
+        finally:
+            app.quit_app()
 
     def test_downloading_only_and_stop_grace(self):
         root = tk.Tk()

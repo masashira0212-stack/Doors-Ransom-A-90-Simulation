@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shlex
 import tempfile
 
 from ransom_hotkeys import validate_bindings
@@ -23,12 +24,17 @@ class RansomSettings:
     exit_hotkey: str = "*"
     honeypot_chance_percent: float = 1.0
     honeypot_value: int = 500
+    ransom_seconds: float = 90.0
+    popup_scale_percent: int = 100
+    failure_command: str = ""
 
     @classmethod
     def from_values(cls, coins: object, minimum: object, maximum: object,
                     stop_grace: object = 0.25, trigger_hotkey: str = "+",
                     restore_hotkey: str = "-", exit_hotkey: str = "*",
-                    honeypot_chance: object = 1.0, honeypot_value: object = 500) -> RansomSettings:
+                    honeypot_chance: object = 1.0, honeypot_value: object = 500,
+                    ransom_seconds: object = 90.0, popup_scale_percent: object = 100,
+                    failure_command: object = "") -> RansomSettings:
         try:
             if any(isinstance(value, bool) for value in (coins, minimum, maximum, stop_grace)):
                 raise ValueError
@@ -55,17 +61,71 @@ class RansomSettings:
                 raise ValueError
         except (ValueError, TypeError, OverflowError):
             raise ValueError("Honeypot chance must be 0-100%. Payment must be a whole number, 1-9990.") from None
+        try:
+            if isinstance(ransom_seconds, bool) or isinstance(popup_scale_percent, bool):
+                raise ValueError
+            duration, scale = float(ransom_seconds), float(popup_scale_percent)
+            if not math.isfinite(duration) or not 10 <= duration <= 100:
+                raise ValueError
+            if not math.isfinite(scale) or not scale.is_integer() or not 50 <= scale <= 150:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError("Ransom timer must be 10-100 seconds. Popup scale must be a whole percentage from 50 to 150.") from None
+        command = validate_failure_command(failure_command)
         return cls(int(coin_number), lo, hi, grace, trigger_hotkey, restore_hotkey,
-                   exit_hotkey, chance, int(value))
+                   exit_hotkey, chance, int(value), duration, int(scale), command)
 
     def validated(self) -> RansomSettings:
         return self.from_values(self.required_coins, self.min_spawn_seconds,
                                 self.max_spawn_seconds, self.stop_grace_seconds,
                                 self.trigger_hotkey, self.restore_hotkey, self.exit_hotkey,
-                                self.honeypot_chance_percent, self.honeypot_value)
+                                self.honeypot_chance_percent, self.honeypot_value,
+                                self.ransom_seconds, self.popup_scale_percent,
+                                self.failure_command)
 
 
 DEFAULT_SETTINGS = RansomSettings()
+
+
+_BLOCKED_FAILURE_EXECUTABLES = {
+    "cmd.exe", "command.com", "powershell.exe", "pwsh.exe", "wscript.exe",
+    "cscript.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe",
+    "schtasks.exe", "wmic.exe", "curl.exe", "bitsadmin.exe", "certutil.exe",
+}
+
+
+def failure_command_arguments(value: object) -> list[str]:
+    """Parse the opt-in failure action without invoking a command shell.
+
+    The setting is deliberately limited to a direct, absolute .exe path plus
+    optional arguments.  Batch files and command interpreters would make a
+    harmless visual simulator silently inherit unrestricted shell behavior.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Failure command must be text.")
+    command = value.strip()
+    if not command:
+        return []
+    if len(command) > 2048 or "\x00" in command or "\r" in command or "\n" in command:
+        raise ValueError("Failure command must be one line, up to 2048 characters.")
+    try:
+        arguments = shlex.split(command, posix=False)
+    except ValueError:
+        raise ValueError("Failure command has unmatched quotes.") from None
+    if not arguments:
+        return []
+    executable = Path(arguments[0].strip('"')).expanduser()
+    if not executable.is_absolute() or executable.suffix.lower() != ".exe":
+        raise ValueError("Failure command must start with an absolute .exe path in quotes when it has spaces.")
+    if executable.name.lower() in _BLOCKED_FAILURE_EXECUTABLES:
+        raise ValueError("Command shells and script hosts are not allowed for the failure action.")
+    arguments[0] = str(executable)
+    return arguments
+
+
+def validate_failure_command(value: object) -> str:
+    failure_command_arguments(value)
+    return value.strip() if isinstance(value, str) else ""
 
 
 def default_settings_path() -> Path:
@@ -95,6 +155,9 @@ def load_settings(path: Path | None = None) -> RansomSettings:
             data.get("stop_grace_seconds", DEFAULT_SETTINGS.stop_grace_seconds),
             data.get("trigger_hotkey", "+"), data.get("restore_hotkey", "-"), data.get("exit_hotkey", "*"),
             data.get("honeypot_chance_percent", 1.0), data.get("honeypot_value", 500),
+            data.get("ransom_seconds", DEFAULT_SETTINGS.ransom_seconds),
+            data.get("popup_scale_percent", DEFAULT_SETTINGS.popup_scale_percent),
+            data.get("failure_command", DEFAULT_SETTINGS.failure_command),
         )
     except (json.JSONDecodeError, KeyError):
         raise ValueError("Invalid settings file. Check the values and save again.") from None

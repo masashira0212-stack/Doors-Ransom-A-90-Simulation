@@ -15,6 +15,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 MAIN_SOURCE = (PROJECT_DIR / "doors_ransom.py").read_text(encoding="utf-8")
 RUNTIME_SOURCE = "\n".join((PROJECT_DIR / name).read_text(encoding="utf-8") for name in (
     "doors_ransom.py", "ransom_hotkeys.py", "ransom_config.py", "ransom_setting.py"))
+CONFIG_SOURCE = (PROJECT_DIR / "ransom_config.py").read_text(encoding="utf-8")
 SPEC_SOURCE = (PROJECT_DIR / "ransom.spec").read_text(encoding="utf-8")
 
 
@@ -41,17 +42,28 @@ def main() -> int:
         raise AssertionError("command hotkeys do not use Windows hotkey messages")
 
     # No network, persistence, privilege elevation, or user-file operations.
+    # One opt-in, direct executable launch is allowed after a RANSOM timeout.
+    # It is parsed by the configuration module and must not invoke a shell.
     for token in (
         "import socket",
         "import requests",
         "import urllib",
         "import winreg",
-        "subprocess.",
         "os.startfile",
         "ShellExecute",
         "SPI_SETDESKWALLPAPER",
     ):
         require_absent(token)
+
+    if MAIN_SOURCE.count("subprocess.Popen(") != 1:
+        raise AssertionError("runtime must expose only one controlled failure-action launch")
+    for required in ("failure_command_arguments(", "shell=False", "close_fds=True", "is_absolute()"):
+        if required not in RUNTIME_SOURCE:
+            raise AssertionError(f"controlled failure action is missing: {required}")
+    for prohibited in ("shell=True", "subprocess.run(", "subprocess.call(", "subprocess.check_call(", "subprocess.check_output("):
+        require_absent(prohibited)
+    if 'failure_command: str = ""' not in CONFIG_SOURCE:
+        raise AssertionError("failure action must remain opt-in by default")
 
     if "uac_admin=True" in SPEC_SOURCE or "uac_uiaccess=True" in SPEC_SOURCE:
         raise AssertionError("packaging requests elevated or UIAccess privileges")
@@ -60,7 +72,7 @@ def main() -> int:
     if "exclude_binaries=True" not in SPEC_SOURCE or "COLLECT(" not in SPEC_SOURCE:
         raise AssertionError("release must use an inspectable portable-folder package")
 
-    print("SECURITY BEHAVIOR OK: inspectable portable package; explicit configurable command hotkeys; no key polling/hooks, network, persistence, elevation, or wallpaper writes")
+    print("SECURITY BEHAVIOR OK: inspectable portable package; explicit configurable hotkeys; one opt-in direct failure action; no key polling/hooks, network, persistence, elevation, or wallpaper writes")
     return 0
 
 

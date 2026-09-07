@@ -34,7 +34,7 @@ def main():
         pump(root, 0.1)
         app._cancel_callbacks()
         scheduled = []
-        # Exercise each animation step deterministically, without moving the
+        # Exercise the drag coalescer deterministically, without moving the
         # user's real pointer or relying on an unrelated watchdog tick.
         with patch.object(app, "_later", side_effect=lambda delay, callback: scheduled.append((delay, callback))):
             coin_id, coin = next(iter(app.coin_windows.items()))
@@ -42,7 +42,7 @@ def main():
             get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
             get_style.restype = ctypes.c_ssize_t
             assert get_style(hwnd(coin["window"]), -20) & 0x08000000, "coin can activate on click"
-            assert not coin["canvas"].bind("<B1-Motion>"), "queued motion still drives coin placement"
+            assert coin["canvas"].bind("<B1-Motion>"), "coin does not receive direct drag motion"
             foreground = user32.GetForegroundWindow()
             app._begin_coin_drag(coin_id, SimpleNamespace(x_root=coin["x"] + 6, y_root=coin["y"] + 6))
             assert root.grab_current() is coin["canvas"]
@@ -52,24 +52,31 @@ def main():
                 app._animate_coin_drag(coin_id, token)
                 assert app.balance == 500 and coin_id in app.coin_windows, "a press without dragging paid a coin"
             with patch.object(app, "_coin_hits_note", return_value=False):
-                for step in range(32):
-                    x, y = 140.0 + step * 5, 240.0 + step * 2
-                    coin["drag_target_x"], coin["drag_target_y"] = -9999.0, -9999.0
-                    count = len(scheduled)
-                    with patch.object(app, "_coin_pointer_position", return_value=(x + 6, y + 6)):
-                        app._animate_coin_drag(coin_id, token)
-                    root.update_idletasks()
-                    assert position(coin["window"]) == (round(x), round(y)), "coin moved backwards or used stale coordinates"
-                    assert len(scheduled) == count + 1 and scheduled[-1][0] == 16
-                # A stationary cursor causes no redundant native moves.
-                with patch.object(app, "_coin_pointer_position", return_value=(x + 6, y + 6)), \
-                     patch.object(app, "_move_coin_window", wraps=app._move_coin_window) as move:
-                    for _ in range(12):
-                        app._animate_coin_drag(coin_id, token)
-                    assert move.call_count == 0, "stationary coin jittered"
-                count = len(scheduled)
+                # Many queued motion events must collapse into one native move
+                # using the newest pointer position. This keeps the coin under
+                # a fast cursor without flooding SetWindowPos calls.
+                with patch.object(app, "_move_coin_window", wraps=app._move_coin_window) as move:
+                    for step in range(32):
+                        x, y = 140.0 + step * 5, 240.0 + step * 2
+                        result = app._queue_coin_drag_motion(
+                            coin_id, SimpleNamespace(x_root=x + 6, y_root=y + 6)
+                        )
+                        assert result == "break", "drag motion did not remain captured"
+                    assert coin["drag_apply_pending"], "drag motion was not queued"
+                    root.update()
+                    assert position(coin["window"]) == (round(x), round(y)), "coin did not use the newest pointer position"
+                    assert move.call_count == 1, "drag motion was not coalesced"
+                    # A stationary cursor causes no redundant native move.
+                    app._queue_coin_drag_motion(coin_id, SimpleNamespace(x_root=x + 6, y_root=y + 6))
+                    root.update()
+                    assert move.call_count == 1, "stationary coin jittered"
+                with patch.object(app, "_restack_ransom_windows", wraps=app._restack_ransom_windows) as batch:
+                    app._repair_ransom_visibility()
+                    assert batch.call_count == 0, "dragging rebuilt the popup stack"
+                    assert app.ransom_stack_repair_deferred, "drag did not defer visibility repair"
                 app._animate_coin_drag(coin_id, token - 1)
-                assert len(scheduled) == count and coin["drag_animation_pending"], "stale drag loop restarted"
+                assert not coin["drag_apply_pending"], "stale drag callback restarted work"
+            assert_visible(app)
             assert user32.GetForegroundWindow() == foreground, "drag stole focus"
 
             popups = [app.note_window] + [r["window"] for r in app.glitch_windows]
@@ -102,7 +109,7 @@ def main():
                 app._collect_coin(coin_id)
                 assert_visible(app)
                 assert user32.GetForegroundWindow() == foreground
-            print("COIN INTERACTION OK: live pointer, stable hold, one drag loop, atomic payment, no focus changes")
+            print("COIN INTERACTION OK: coalesced direct drag, stable stack, atomic payment, no focus changes")
     finally:
         app.quit_app()
 

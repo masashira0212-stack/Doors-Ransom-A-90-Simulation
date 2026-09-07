@@ -311,9 +311,18 @@ def main() -> int:
         if simulator.note_canvas.type(item) == "text"
     )
     check("FILES" in note_text and "ITEMS" not in note_text, "redrawn ransom note did not use FILES")
+    displayed_time = simulator.note_canvas.itemcget(simulator.time_item, "text")
+    # The first clock update runs asynchronously every 50ms, so a real GUI
+    # run can legitimately paint 01:29 by the time this assertion is reached.
+    # Check that the display tracks the configured deadline within that single
+    # update interval instead of assuming the scheduler has not advanced.
+    remaining_now = simulator.ransom_deadline - time.monotonic()
     check(
         simulator.note_canvas.itemcget(simulator.balance_item, "text") == "500"
-        and simulator.note_canvas.itemcget(simulator.time_item, "text") == "01:30",
+        and displayed_time in {
+            format_clock(remaining_now),
+            format_clock(remaining_now + 0.06),
+        },
         "ransom note dynamic balance/time fields were not initialized",
     )
     check(
@@ -429,6 +438,10 @@ def main() -> int:
     )
     now = time.monotonic()
     thrown_record["drag_samples"] = [(now - 0.05, thrown_start_x + 6, thrown_start_y + 6)]
+    # The spawn routine avoids visual overlap but deliberately allows the
+    # enlarged payment hitbox to overlap. Disable scoring for this release so
+    # this check isolates throw velocity; scoring is re-enabled for impact.
+    thrown_record["user_armed"] = False
     simulator._release_coin(
         thrown_coin_id,
         SimpleNamespace(
@@ -440,6 +453,7 @@ def main() -> int:
         thrown_record["moving"] and thrown_record["velocity_x"] * throw_sign > 0,
         "releasing a dragged coin did not throw it in the release direction",
     )
+    thrown_record["user_armed"] = True
     popup_record = simulator.glitch_windows[0]
     popup_left = float(popup_record["x"])
     popup_top = float(popup_record["y"])

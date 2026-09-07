@@ -15,7 +15,11 @@ Windows hotkey-message API, so the hidden simulator can be started, restored,
 or closed without reading any other user input. The source and build
 instructions are included in this project so a release can be inspected and
 reproduced. `security_behavior_test.py` prevents these limits from accidentally
-being broadened.
+being broadened. The default failure action is empty. If the player explicitly
+sets one, a timeout can start exactly one absolute-path `.exe` directly with
+optional arguments; it does not invoke `cmd`, PowerShell, batch files, or a
+script host. The configured executable is outside this simulator's control and
+should be trusted by the player.
 
 The settings editor captures a key only while its own key-selection control
 is focused. Trigger and Restore registrations are temporarily released while

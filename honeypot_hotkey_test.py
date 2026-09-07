@@ -17,11 +17,24 @@ from ransom_hotkeys import (binding_combinations, capture_binding, command_hotke
 from ransom_setting import SettingsWindow
 
 
+class SettingsPath:
+    """A disposable settings path that works with managed Windows temp ACLs."""
+
+    def __enter__(self) -> Path:
+        handle = tempfile.NamedTemporaryFile(prefix="ransom-hotkey-", suffix=".json", delete=False)
+        self.path = Path(handle.name)
+        handle.close()
+        self.path.unlink(missing_ok=True)
+        return self.path
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        self.path.unlink(missing_ok=True)
+
+
 class NewSettingsTests(unittest.TestCase):
     def test_validation_and_round_trip(self):
         expected = RansomSettings.from_values(900, 5, 20, .25, "F6", "Ctrl+F7", "Shift+F8", 2.5, 750)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "settings.json"
+        with SettingsPath() as path:
             save_settings(expected, path)
             self.assertEqual(load_settings(path), expected)
         for changes in ({"honeypot_chance_percent": -1}, {"honeypot_chance_percent": 101},
@@ -48,10 +61,10 @@ class NewSettingsTests(unittest.TestCase):
         )
 
     def test_settings_buttons(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with SettingsPath() as path:
             root = tk.Tk()
             root.withdraw()
-            window = SettingsWindow(root, Path(directory) / "settings.json")
+            window = SettingsWindow(root, path)
             try:
                 window.begin_capture("trigger")
                 self.assertFalse(window.save(), "Save accepted an unfinished capture")
@@ -153,13 +166,13 @@ class CollectibleTests(unittest.TestCase):
 
 class NativeHotkeyTests(unittest.TestCase):
     def test_settings_focus_pauses_actions_except_exit(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with SettingsPath() as path:
             root = tk.Tk()
             root.withdraw()
             app = RansomSimulator(root, use_saved_settings=False, enable_global_hotkeys=True,
                                   enable_shell_effects=False)
             settings_root = tk.Toplevel(root)
-            editor = SettingsWindow(settings_root, Path(directory) / "settings.json")
+            editor = SettingsWindow(settings_root, path)
             try:
                 self.assertTrue(app.global_hotkey_ready.wait(2))
                 root.update()
@@ -195,8 +208,7 @@ class NativeHotkeyTests(unittest.TestCase):
 
     def test_live_rebind_suspend_resume_and_stale_messages(self):
         import ctypes
-        with tempfile.TemporaryDirectory() as directory, patch("doors_ransom.settings_has_focus", return_value=False) as focus:
-            path = Path(directory) / "settings.json"
+        with SettingsPath() as path, patch("doors_ransom.settings_has_focus", return_value=False) as focus:
             root = tk.Tk()
             root.withdraw()
             app = RansomSimulator(root, settings_path=path, enable_global_hotkeys=True, enable_shell_effects=False)
