@@ -96,8 +96,9 @@ class SettingsWindow:
         buttons = ttk.Frame(body)
         buttons.grid(row=15, column=0, columnspan=2, sticky="e")
         ttk.Button(buttons, text="Save", command=self.save).pack(side="left", padx=(0, 6))
-        ttk.Button(buttons, text="Close", command=root.destroy).pack(side="left")
+        ttk.Button(buttons, text="Close", command=self.close).pack(side="left")
         root.bind("<KeyPress>", self._window_key)
+        root.protocol("WM_DELETE_WINDOW", self.close)
         try:
             self.fill(load_settings(self.path))
             self.status.set("Save to apply. Active minigames are not changed.")
@@ -108,6 +109,54 @@ class SettingsWindow:
         width, height = root.winfo_reqwidth(), root.winfo_reqheight()
         # Keep automatic sizing so a wrapped validation error cannot hide Save.
         root.geometry(f"+{max(0, (root.winfo_screenwidth()-width)//2)}+{max(0, (root.winfo_screenheight()-height)//2)}")
+        self._pop_geometry = (width, height, root.winfo_x(), root.winfo_y())
+        self._closing = False
+        root.after_idle(self._pop_in)
+
+    def _pop_in(self, step: int = 0) -> None:
+        if self._closing or not self.root.winfo_exists():
+            return
+        # Keep the dialog fully opaque: this is a physical pop, not a fade.
+        scales = (0.22, 0.58, 1.20, 0.88, 1.06, 1.0)
+        width, height, x, y = self._pop_geometry
+        scale = scales[min(step, len(scales) - 1)]
+        scaled_width = max(1, round(width * scale))
+        scaled_height = max(1, round(height * scale))
+        try:
+            self.root.geometry(
+                f"{scaled_width}x{scaled_height}+{round(x + (width - scaled_width) / 2)}+{round(y + (height - scaled_height) / 2)}"
+            )
+        except tk.TclError:
+            return
+        if step < len(scales) - 1:
+            self.root.after(16, lambda: self._pop_in(step + 1))
+
+    def close(self, step: int = 0) -> None:
+        if not self.root.winfo_exists():
+            return
+        self._closing = True
+        if step == 0:
+            self._pop_geometry = (
+                max(1, self.root.winfo_width()),
+                max(1, self.root.winfo_height()),
+                self.root.winfo_x(),
+                self.root.winfo_y(),
+            )
+        width, height, x, y = self._pop_geometry
+        scales = (1.0, 1.12, 0.70, 0.26)
+        scale = scales[min(step, len(scales) - 1)]
+        scaled_width = max(1, round(width * scale))
+        scaled_height = max(1, round(height * scale))
+        try:
+            self.root.geometry(
+                f"{scaled_width}x{scaled_height}+{round(x + (width - scaled_width) / 2)}+{round(y + (height - scaled_height) / 2)}"
+            )
+        except tk.TclError:
+            return
+        if step < len(scales) - 1:
+            self.root.after(16, lambda: self.close(step + 1))
+        else:
+            self.root.destroy()
 
     def fill(self, settings: RansomSettings) -> None:
         self.coins.set(str(settings.required_coins))
@@ -148,7 +197,7 @@ class SettingsWindow:
         if self.capturing is not None:
             return self._capture_key(event)
         if event.keysym == "Escape":
-            self.root.destroy()
+            self.close()
             return "break"
         if event.keysym.lower() == "s" and event.state & 4:
             self.save()
