@@ -1,6 +1,15 @@
-# Doors-Ransom-A-90-Simulation
+<div align="center">
+<p align="center">
+ <img src="https://github.com/Longbatman09/Doors-Ransom-A-90-Simulation/blob/0114bcf78878b8baf5c1f95d82ebda3707de595f/imgs/stop%2Ba90.png" width="150">
+</p>
+
+# Doors Ransom A-90 Simulation
+
+
 
 An unofficial, fan-made Windows desktop visual and audio simulator inspired by the Ransom/A-90 encounter in **DOORS**. It presents a deliberately intense encounter sequence: warning screens, a STOP phase, a downloading animation, a timed coin mini-game, and success or failure effects.
+</div>
+
 
 > This is a simulation, not ransomware. The application does not encrypt, delete, upload, or modify user files; it does not alter the wallpaper, taskbar, shortcuts, system icons, cursor, or input settings; and it does not require administrator privileges or use network communication.
 
@@ -15,6 +24,13 @@ This project is not affiliated with, endorsed by, or sponsored by LSPLASH or Rob
 - Short pop-in and pop-out animations for interactive simulator windows.
 - A portable release layout with separate simulator and settings applications.
 - Built-in self-tests and automated regression tests.
+
+## Demo
+
+<p align="center">
+ 
+<img src="https://github.com/Longbatman09/Doors-Ransom-A-90-Simulation/blob/0114bcf78878b8baf5c1f95d82ebda3707de595f/imgs/DEMO.gif" width="500">
+</p>
 
 ## Safety and behavior
 
