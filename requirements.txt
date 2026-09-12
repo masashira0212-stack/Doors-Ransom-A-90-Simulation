@@ -2,3 +2,4 @@
 Pillow>=10.0,<12
 pygame>=2.5,<3
 numpy>=1.26,<3
+opencv-python>=4.8
