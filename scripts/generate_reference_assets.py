@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
 TEMPLATE = ASSETS / "ransom_note_template.png"
 COIN = ASSETS / "coin_token.png"

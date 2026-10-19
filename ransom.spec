@@ -26,16 +26,17 @@ safe_asset_names = [
     "stop.png",
     "stop_reference.png",
     "thank_you.png",
+    "Thank_you_vid.mp4",
     "RobotoMono-VariableFont_wght.ttf",
     "RobotoMono-OFL.txt",
 ]
 
 excluded_modules = [
-    "numpy",
-    "ssl",
-    "hashlib",
-    "asyncio",
-    "multiprocessing",
+    
+    
+    
+    
+    
     "PIL.AvifImagePlugin",
     "PIL.ImageCms",
     "PIL._imagingft",

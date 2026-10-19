@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import cv2
 import wave
 from pathlib import Path
 from typing import Any, Callable
@@ -301,7 +302,12 @@ class AudioBank:
     def close(self) -> None:
         if self.available:
             self.stop_all()
-            self._pygame.mixer.quit()
+            if self._pygame is not None:
+                try:
+                    self._pygame.mixer.quit()
+                    self._pygame.quit()
+                except Exception:
+                    pass
 
 
 class RansomSimulator:
@@ -514,6 +520,7 @@ class RansomSimulator:
         self.root.bind_all("<ButtonPress>", self._on_pointer_press, add="+")
         self.root.bind_all("<ButtonRelease>", self._on_pointer_release, add="+")
         self.root.bind_all("<MouseWheel>", self._on_pointer_press, add="+")
+        self.root.bind_all("<grave>", self._force_complete, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
         self.root.report_callback_exception = self._handle_tk_callback_exception
         self._start_global_command_listener()
@@ -564,11 +571,12 @@ class RansomSimulator:
         window.geometry(f"+{max(0, (window.winfo_screenwidth() - width) // 2)}+{max(0, (window.winfo_screenheight() - height) // 2)}")
         window.lift()
         window.focus_force()
+        self._animate_shock_pop(window, width, height, window.winfo_x(), window.winfo_y())
 
     def _dismiss_startup_popup(self) -> None:
         window = self.startup_window
         self.startup_window = None
-        self._destroy_window(window)
+        self._pop_out_and_destroy(window)
 
     def _popup_scale_factor(self) -> float:
         active = (
@@ -1108,6 +1116,7 @@ class RansomSimulator:
             self.stage = "waiting"
             self._later(30, self._show_intro)
             return
+        self._animate_shock_pop(window, measured_width, measured_height, window.winfo_x(), window.winfo_y())
         # Keep the warning sound isolated so jumpscare1 can overlap without
         # truncating its tail.
         self.audio.play("jumpscare2.mp3", channel="warning")
@@ -1200,7 +1209,7 @@ class RansomSimulator:
                 lambda token=self.intro_sequence_id: self._center_warning(token),
             )
             return
-        self._destroy_window(self.intro_window)
+        self._pop_out_and_destroy(self.intro_window)
         self.intro_window = None
         self.intro_visible_since = 0.0
         self.intro_deadline = 0.0
@@ -1512,7 +1521,7 @@ class RansomSimulator:
         """Fit the 315:185 note to the current work area, including its frame."""
         left, top, right, bottom = self._primary_work_area()
         maximum = min((right - left - 32) / 945, (bottom - top - 64) / 555)
-        self.note_scale = max(0.1, min(self._popup_scale_factor(), maximum))
+        self.note_scale = max(0.1, min(self._popup_scale_factor(), maximum)) * 0.8
         self.NOTE_WIDTH = max(1, round(945 * self.note_scale))
         self.NOTE_HEIGHT = max(1, round(555 * self.note_scale))
 
@@ -1616,12 +1625,13 @@ class RansomSimulator:
             self._expire_face_flash(record)
             return
         window.lift()
+        self._animate_shock_pop(window, size, size, x, y)
         self._later(self.rng.randint(75, 135), lambda: self._expire_face_flash(record))
 
     def _expire_face_flash(self, record: dict[str, Any]) -> None:
         if record in self.face_flash_windows:
             self.face_flash_windows.remove(record)
-        self._destroy_window(record.get("window"))
+        self._pop_out_and_destroy(record.get("window"))
 
     def _create_ransom_border_frame(self) -> None:
         if self.ransom_frame_window is not None or os.name != "nt":
@@ -1784,18 +1794,23 @@ class RansomSimulator:
         image_name = f"glitch_{self.rng.randint(1, 6)}.png"
         width = self._scaled_popup_size(self.rng.randint(240, 420), minimum=120)
         height = self.rng.randint(round(width * 0.56), round(width * 0.70))
-        x = self.rng.randint(0, max(0, self.screen_width - width - 20))
-        y = self.rng.randint(20, max(20, self.screen_height - height - 60))
+        x, y = self._spread_popup_position(width, height + 30)
         window = tk.Toplevel(self.root)
-        window.title(self.rng.choice(("I FOUND YOU", "IMG.JPG", "RANSOM", "STOP MOVING", "CORRUPTED", "ERROR")))
-        window.configure(bg="black", cursor=self.minigame_cursor)
+        title_text = self.rng.choice(("I FOUND YOU", "IMG.JPG", "RANSOM", "STOP MOVING", "CORRUPTED", "ERROR"))
+        window.title(title_text)
+        window.configure(bg="#222222", cursor=self.minigame_cursor)
         window.attributes("-topmost", True)
-        window.resizable(False, False)
-        window.geometry(f"{width}x{height}+{x}+{y}")
-        self._make_non_minimizable(window)
+        window.overrideredirect(True)
+        self._animate_shock_pop(window, width, height + 30, x, y)
+        
+        # Add Aero Titlebar
+        titlebar = self._create_aero_titlebar(window, title_text, width)
+        titlebar.pack(side="top", fill="x")
+
         photo = self._new_photo(image_name, (width, height))
         label = tk.Label(window, image=photo, bg="black", borderwidth=0, cursor=self.minigame_cursor)
-        label.pack(fill="both", expand=True)
+        label.pack(side="bottom", fill="both", expand=True)
+        self._make_draggable(window, label)
         record: dict[str, Any] = {
             "window": window,
             "label": label,
@@ -1815,8 +1830,40 @@ class RansomSimulator:
         self.glitch_windows.append(record)
         window.protocol("WM_DELETE_WINDOW", lambda item=record: self._close_glitch(item))
 
+    def _spread_popup_position(self, width: int, height: int) -> tuple[int, int]:
+        """Choose the least crowded location, reserving room for RANSOM."""
+        left, top, right, bottom = self._primary_work_area()
+        min_x, min_y = left + 12, top + 32
+        max_x = max(min_x, right - width - 12)
+        max_y = max(min_y, bottom - height - 52)
+        occupied = [
+            (int(item["base_x"]), int(item["base_y"]), int(item["width"]), int(item["height"]) + 30)
+            for item in self.glitch_windows
+        ]
+        note_x = max(left + 12, right - self.NOTE_WIDTH - 24)
+        occupied.append((note_x, top + 12, self.NOTE_WIDTH, self.NOTE_HEIGHT + 30))
+        candidates = [
+            (x, y)
+            for x in (min_x, (min_x + max_x) // 2, max_x)
+            for y in (min_y, (min_y + max_y) // 2, max_y)
+        ]
+        candidates.extend(
+            (self.rng.randint(min_x, max_x), self.rng.randint(min_y, max_y)) for _ in range(24)
+        )
+
+        def clearance(candidate: tuple[int, int]) -> int:
+            x, y = candidate
+            distances = []
+            for other_x, other_y, other_width, other_height in occupied:
+                horizontal = max(other_x - (x + width), x - (other_x + other_width), 0)
+                vertical = max(other_y - (y + height), y - (other_y + other_height), 0)
+                distances.append(horizontal + vertical)
+            return min(distances, default=0)
+
+        return max(candidates, key=clearance)
+
     def _close_glitch(self, record: dict[str, Any]) -> None:
-        self._destroy_window(record.get("window"))
+        self._pop_out_and_destroy(record.get("window"))
         if record in self.glitch_windows:
             self.glitch_windows.remove(record)
 
@@ -1829,21 +1876,12 @@ class RansomSimulator:
             if not self._window_exists(window):
                 self.glitch_windows.remove(record)
                 continue
-            if now >= record["next_toggle"] and record["fade_direction"] == 0.0:
-                record["fade_direction"] = -self.GLITCH_FADE_STEP
-            if record["fade_direction"] < 0.0:
-                record["alpha"] = max(0.0, min(1.0, record["alpha"] + record["fade_direction"]))
-                try:
-                    window.attributes("-alpha", record["alpha"])
-                except tk.TclError:
-                    pass
-                if record["alpha"] <= 0.0:
-                    # The old popup never changes its assigned image. Once it
-                    # has fully faded, destroy it and immediately create a new
-                    # independently sized/positioned popup.
-                    self._close_glitch(record)
-                    self._create_glitch_window(self.rng.randint(100, 9999))
-                    continue
+            if now >= record["next_toggle"]:
+                # Replace each popup with a sharp exit and a newly positioned
+                # window, rather than fading several windows into one cluster.
+                self._close_glitch(record)
+                self._create_glitch_window(self.rng.randint(100, 9999))
+                continue
             record["x"] = max(
                 0,
                 min(self.screen_width - record["width"] - 10, record["base_x"] + self.rng.randint(-4, 4)),
@@ -1858,6 +1896,69 @@ class RansomSimulator:
             self._create_glitch_window(len(self.glitch_windows) + self.rng.randint(20, 80))
         self._later(16, self._animate_glitch_windows)
 
+    def _make_draggable(self, window, widget) -> None:
+        def on_press(event):
+            window._drag_start_x = event.x_root
+            window._drag_start_y = event.y_root
+            window._drag_start_win_x = window.winfo_x()
+            window._drag_start_win_y = window.winfo_y()
+            window._is_dragging = True
+            self.ransom_stack_repair_deferred = True
+        def on_drag(event):
+            dx = event.x_root - getattr(window, "_drag_start_x", event.x_root)
+            dy = event.y_root - getattr(window, "_drag_start_y", event.y_root)
+            x = getattr(window, "_drag_start_win_x", window.winfo_x()) + dx
+            y = getattr(window, "_drag_start_win_y", window.winfo_y()) + dy
+            try:
+                window.geometry(f"+{x}+{y}")
+            except Exception:
+                pass
+            if getattr(self, "note_window", None) is window:
+                self.note_base_x = x
+                self.note_base_y = y
+        def on_release(event):
+            window._is_dragging = False
+        widget.bind("<ButtonPress-1>", on_press, add="+")
+        widget.bind("<B1-Motion>", on_drag, add="+")
+        widget.bind("<ButtonRelease-1>", on_release, add="+")
+
+    def _create_aero_titlebar(self, window: tk.Toplevel, title_text: str, width: int) -> tk.Canvas:
+        bar_height = 30
+        titlebar = tk.Canvas(window, width=width, height=bar_height, bg="black", highlightthickness=0, cursor=self.minigame_cursor)
+        for y in range(bar_height):
+            if y < bar_height // 2:
+                r = int(180 + (220 - 180) * (y / (bar_height / 2)))
+                g = int(210 + (240 - 210) * (y / (bar_height / 2)))
+                b = int(240 + (255 - 240) * (y / (bar_height / 2)))
+            else:
+                r = int(100 + (140 - 100) * ((y - bar_height / 2) / (bar_height / 2)))
+                g = int(150 + (180 - 150) * ((y - bar_height / 2) / (bar_height / 2)))
+                b = int(200 + (220 - 200) * ((y - bar_height / 2) / (bar_height / 2)))
+            r, g, b = int(r * 0.5), int(g * 0.5), int(b * 0.5)
+            color = f"#{r:02x}{g:02x}{b:02x}"
+            titlebar.create_line(0, y, width, y, fill=color)
+
+        # Make the top highlight slightly darker too to match 50% transparency
+        titlebar.create_line(0, 0, width, 0, fill="#888888")
+        font = ("Segoe UI", 10, "bold") if os.name == "nt" else ("Arial", 10, "bold")
+        titlebar.create_text(11, bar_height//2 + 1, text=title_text, fill="#333333", font=font, anchor="w")
+        titlebar.create_text(10, bar_height//2, text=title_text, fill="#ffffff", font=font, anchor="w")
+
+        close_w, close_h = 45, 18
+        close_x = width - close_w - 6
+        close_y = 6
+        for y in range(close_y, close_y + close_h):
+            color = "#703030" if y < close_y + close_h // 2 else "#601818"
+            titlebar.create_line(close_x, y, close_x + close_w, y, fill=color)
+        titlebar.create_rectangle(close_x, close_y, close_x + close_w, close_y + close_h, outline="#888888")
+        cx, cy = close_x + close_w // 2, close_y + close_h // 2
+        titlebar.create_line(cx - 3, cy - 3, cx + 4, cy + 4, fill="#aaaaaa", width=2)
+        titlebar.create_line(cx + 3, cy - 3, cx - 4, cy + 4, fill="#aaaaaa", width=2)
+
+        self._make_draggable(window, titlebar)
+        
+        return titlebar
+
     def _create_note_window(self) -> None:
         width, height = self.NOTE_WIDTH, self.NOTE_HEIGHT
         scale = self.note_scale * 3.0
@@ -1869,15 +1970,19 @@ class RansomSimulator:
         self.note_base_x, self.note_base_y = x, y
         self.note_jitter_tick = 0
         window.title("RANSOM")
-        window.configure(cursor=self.minigame_cursor)
+        window.configure(cursor=self.minigame_cursor, bg="#222222")
         window.attributes("-topmost", True)
-        window.resizable(False, False)
-        window.geometry(f"{width}x{height}+{x}+{y}")
-        window.protocol("WM_DELETE_WINDOW", lambda: None)
-        self._make_non_minimizable(window)
+        window.overrideredirect(True)
+        self._animate_shock_pop(window, width, height + 30, x, y)
+        
+        # Add Aero Titlebar
+        titlebar = self._create_aero_titlebar(window, "RANSOM", width)
+        titlebar.pack(side="top", fill="x")
+
         canvas = tk.Canvas(window, width=width, height=height, bg="#ff0000", highlightthickness=0, cursor=self.minigame_cursor)
         self.note_canvas = canvas
-        canvas.pack(fill="both", expand=True)
+        canvas.pack(side="bottom", fill="both", expand=True)
+        self._make_draggable(window, canvas)
 
         # Reference proportions, live text, and pixel-sized fonts keep the
         # layout identical across Windows display scaling settings.
@@ -1921,16 +2026,71 @@ class RansomSimulator:
         offsets = ((0, 0), (1, -1), (-1, 1), (2, 0), (-2, -1), (0, 1))
         dx, dy = offsets[self.note_jitter_tick % len(offsets)]
         self.note_jitter_tick += 1
+        if getattr(self.note_window, "_is_dragging", False):
+            self._later(16, self._animate_note_jitter)
+            return
         left, top, right, bottom = self._primary_work_area()
         max_x = max(left + 8, right - self.NOTE_WIDTH - 16)
         max_y = max(top + 8, bottom - self.NOTE_HEIGHT - 48)
         x = max(left + 8, min(max_x, self.note_base_x + dx))
         y = max(top + 8, min(max_y, self.note_base_y + dy))
         try:
-            self.note_window.geometry(f"{self.NOTE_WIDTH}x{self.NOTE_HEIGHT}+{x}+{y}")
+            self.note_window.geometry(f"{self.NOTE_WIDTH}x{self.NOTE_HEIGHT+30}+{x}+{y}")
         except tk.TclError:
             return
         self._later(16, self._animate_note_jitter)
+
+    def _animate_shock_pop(self, window: tk.Toplevel, final_w: int, final_h: int, final_x: int, final_y: int, step: int = 0) -> None:
+        """Reveal a popup with an opaque, forceful scale burst."""
+        if not self._window_exists(window):
+            return
+        scales = (0.18, 0.52, 1.22, 0.90, 1.08, 1.0)
+        scale = scales[min(step, len(scales) - 1)]
+        width = max(1, round(final_w * scale))
+        height = max(1, round(final_h * scale))
+        x = round(final_x + (final_w - width) / 2)
+        y = round(final_y + (final_h - height) / 2)
+        try:
+            window.geometry(f"{width}x{height}+{x}+{y}")
+            window.deiconify()
+            window.lift()
+        except tk.TclError:
+            return
+        if step < len(scales) - 1:
+            self._later(16, lambda: self._animate_shock_pop(window, final_w, final_h, final_x, final_y, step + 1))
+
+    def _pop_out_and_destroy(self, window: tk.Toplevel | None, step: int = 0) -> None:
+        """Give a popup a brief exit animation before releasing its native window."""
+        if not self._window_exists(window):
+            return
+        if self.headless or self._closing:
+            self._destroy_window(window)
+            return
+        scales = (1.0, 1.12, 0.72, 0.30)
+        try:
+            if step == 0:
+                window._pop_out_geometry = (
+                    max(1, window.winfo_width()),
+                    max(1, window.winfo_height()),
+                    window.winfo_x(),
+                    window.winfo_y(),
+                )
+            width, height, x, y = window._pop_out_geometry
+        except tk.TclError:
+            return
+        scale = scales[min(step, len(scales) - 1)]
+        next_width = max(1, round(width * scale))
+        next_height = max(1, round(height * scale))
+        try:
+            window.geometry(
+                f"{next_width}x{next_height}+{round(x + (width - next_width) / 2)}+{round(y + (height - next_height) / 2)}"
+            )
+        except tk.TclError:
+            return
+        if step < len(scales) - 1:
+            self._later(16, lambda: self._pop_out_and_destroy(window, step + 1))
+        else:
+            self._destroy_window(window)
 
     def _move_note_window(self) -> None:
         if self.stage != "ransom" or not self._window_exists(self.note_window):
@@ -1952,7 +2112,7 @@ class RansomSimulator:
             y = min_y if current_y > (min_y + max_y) // 2 else max_y
         self.note_base_x = x
         self.note_base_y = y
-        self.note_window.geometry(f"{width}x{height}+{x}+{y}")
+        self.note_window.geometry(f"{width}x{height+30}+{x}+{y}")
         # Apply the move before raising the topmost window. On Windows, an
         # immediate lift can otherwise restore the window manager's old bounds.
         self.note_window.update_idletasks()
@@ -2004,6 +2164,7 @@ class RansomSimulator:
                 self._configure_visual_layer(window, pointer_passthrough=False)
             window.deiconify()
             window.update_idletasks()
+            self._animate_shock_pop(window, size, size, x, y)
             self.coin_windows[coin_id] = {
                 "window": window,
                 "canvas": canvas,
@@ -2048,13 +2209,30 @@ class RansomSimulator:
             note_top = 34
         note_right = note_left + self.NOTE_WIDTH
         note_bottom = note_top + self.NOTE_HEIGHT
-        for _ in range(30):
-            x = self.rng.randint(8, max(8, self.screen_width - size - 8))
-            y = self.rng.randint(45, max(45, self.screen_height - size - 50))
-            overlaps_note = x + size > note_left and x < note_right and y + size > note_top and y < note_bottom
-            if not overlaps_note:
-                return x, y
-        return 20, max(60, self.screen_height - size - 80)
+        occupied = [
+            (note_left, note_top, note_right - note_left, note_bottom - note_top)
+        ] + [
+            (int(item["x"]), int(item["y"]), int(item["size"]), int(item["size"]))
+            for item in self.coin_windows.values()
+        ]
+        candidates = [
+            (
+                self.rng.randint(8, max(8, self.screen_width - size - 8)),
+                self.rng.randint(45, max(45, self.screen_height - size - 50)),
+            )
+            for _ in range(36)
+        ]
+
+        def clearance(candidate: tuple[int, int]) -> int:
+            x, y = candidate
+            distances = []
+            for other_x, other_y, other_width, other_height in occupied:
+                horizontal = max(other_x - (x + size), x - (other_x + other_width), 0)
+                vertical = max(other_y - (y + size), y - (other_y + other_height), 0)
+                distances.append(horizontal + vertical)
+            return min(distances, default=0)
+
+        return max(candidates, key=clearance)
 
     def _collect_coin(self, coin_id: int) -> None:
         if self.stage != "ransom":
@@ -2449,8 +2627,14 @@ class RansomSimulator:
             return
         self._later(50, self._update_ransom_clock)
 
+    def _force_complete(self, event=None) -> None:
+        if self.stage in ("ransom", "waiting"):
+            self.app_held_inputs.clear()
+            self._cancel_callbacks()
+            self._ransom_success()
+
     def _ransom_success(self) -> None:
-        if self.stage != "ransom":
+        if self.stage not in ("ransom", "waiting"):
             return
         self.stage = "success"
         self.audio.stop_all()
@@ -2500,6 +2684,10 @@ class RansomSimulator:
             transition_window.title("RANSOM")
             transition_window.attributes("-topmost", True)
             transition_window.resizable(False, False)
+            transition_window.overrideredirect(True)
+            titlebar = self._create_aero_titlebar(transition_window, "RANSOM", start_width)
+            titlebar.pack(side="top", fill="x")
+            
             transition_canvas = tk.Canvas(
                 transition_window,
                 width=start_width,
@@ -2508,10 +2696,11 @@ class RansomSimulator:
                 highlightthickness=0,
                 borderwidth=0,
             )
-            transition_canvas.pack(fill="both", expand=True)
+            transition_canvas.pack(side="bottom", fill="both", expand=True)
             start_x = (self.screen_width - start_width) // 2
             start_y = (self.screen_height - start_height) // 2
-            transition_window.geometry(f"{start_width}x{start_height}+{start_x}+{start_y}")
+            transition_window.overrideredirect(True)
+            transition_window.geometry(f"{start_width}x{start_height+30}+{start_x}+{start_y}")
             self.note_window = transition_window
             self.note_canvas = transition_canvas
             self._begin_thank_growth(
@@ -2641,7 +2830,19 @@ class RansomSimulator:
         self.time_item = None
         canvas.configure(width=start_width, height=start_height, bg="#a7e86a")
         canvas.delete("all")
-        self.thank_photo = self._new_pixel_photo("thank_you.png", (start_width, start_height))
+        try:
+            self.thank_video_cap = cv2.VideoCapture(str(ASSET_DIR / "Thank_you_vid.mp4"))
+            ret, frame = self.thank_video_cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if frame.shape[1] != start_width or frame.shape[0] != start_height:
+                    frame = cv2.resize(frame, (start_width, start_height))
+                img = Image.fromarray(frame)
+                self.thank_photo = ImageTk.PhotoImage(image=img)
+            else:
+                self.thank_photo = self._new_pixel_photo("thank_you.png", (start_width, start_height))
+        except Exception:
+            self.thank_photo = self._new_pixel_photo("thank_you.png", (start_width, start_height))
         self.thank_image_item = canvas.create_image(
             start_width // 2,
             start_height // 2,
@@ -2696,9 +2897,20 @@ class RansomSimulator:
         x = round(start_x + (target_x - start_x) * eased)
         y = round(start_y + (target_y - start_y) * eased)
         try:
-            window.geometry(f"{width}x{height}+{x}+{y}")
+            window.geometry(f"{width}x{height+30}+{x}+{y}")
             self.note_canvas.configure(width=width, height=height)
-            self.thank_photo = self._new_pixel_photo("thank_you.png", (width, height))
+            try:
+                ret, frame = self.thank_video_cap.read()
+                if ret:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if frame.shape[1] != width or frame.shape[0] != height:
+                        frame = cv2.resize(frame, (width, height))
+                    img = Image.fromarray(frame)
+                    self.thank_photo = ImageTk.PhotoImage(image=img)
+                else:
+                    self.thank_photo = self._new_pixel_photo("thank_you.png", (width, height))
+            except Exception:
+                self.thank_photo = self._new_pixel_photo("thank_you.png", (width, height))
             if self.thank_image_item is not None:
                 self.note_canvas.coords(self.thank_image_item, width // 2, height // 2)
                 self.note_canvas.itemconfigure(self.thank_image_item, image=self.thank_photo)
@@ -2706,8 +2918,10 @@ class RansomSimulator:
             return
         if progress >= 1.0:
             self.thank_phase = "display"
-            # Only the image is brief; the supplied success sound remains intact.
-            self._later(self.THANK_DISPLAY_MS, self._dismiss_thank_window)
+            if getattr(self, "thank_video_cap", None) is not None:
+                self._play_thank_video_frame(width, height)
+            else:
+                self.quit_app()
             return
         self._later(
             self.THANK_FRAME_MS,
@@ -2724,6 +2938,32 @@ class RansomSimulator:
                 target_y,
             ),
         )
+
+    def _play_thank_video_frame(self, width: int, height: int) -> None:
+        if self.stage != "success" or not self.thank_video_cap:
+            return
+        ret, frame = self.thank_video_cap.read()
+        if ret:
+            try:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if frame.shape[1] != width or frame.shape[0] != height:
+                    frame = cv2.resize(frame, (width, height))
+                img = Image.fromarray(frame)
+                self.thank_photo = ImageTk.PhotoImage(image=img)
+                if self.thank_image_item is not None and self.note_canvas is not None:
+                    self.note_canvas.itemconfigure(self.thank_image_item, image=self.thank_photo)
+                fps = self.thank_video_cap.get(cv2.CAP_PROP_FPS)
+                delay = int(1000 / fps) if fps > 0 else 33
+                self._later(delay, lambda: self._play_thank_video_frame(width, height))
+            except Exception as e:
+                print("Error playing frame:", e)
+                self.thank_video_cap.release()
+                self.thank_video_cap = None
+                self.quit_app()
+        else:
+            self.thank_video_cap.release()
+            self.thank_video_cap = None
+            self.quit_app()
 
     def _dismiss_thank_window(self) -> None:
         if self.stage != "success":
@@ -3046,12 +3286,11 @@ class RansomSimulator:
         # one-frame flash of the red backdrop and competed with pointer moves.
         # The drag itself never changes the layer order, so defer repairs until
         # the mouse is released or the coin is paid.
-        if self._has_active_coin_drag():
+        controls = [r.get("window") for r in self.glitch_windows] + [self.note_window]
+        if self._has_active_coin_drag() or any(getattr(w, "_is_dragging", False) for w in controls if w is not None):
             self.ransom_stack_repair_deferred = True
             return
         try:
-            controls = [r["window"] for r in self.glitch_windows]
-            controls += [self.note_window]
             controls += [r["window"] for r in self.coin_windows.values()]
             for window in controls:
                 if self._window_exists(window):
@@ -3870,7 +4109,10 @@ class RansomSimulator:
         self._cancel_callbacks()
         self._stop_global_command_listener()
         for callback_id in self.preparation_after_ids:
-            self.root.after_cancel(callback_id)
+            try:
+                self.root.after_cancel(callback_id)
+            except Exception:
+                pass
         self.preparation_after_ids.clear()
         if self.wait_watchdog_after_id is not None:
             try:
@@ -4062,6 +4304,14 @@ def main() -> int:
     )
     if args.show_controller:
         root.deiconify()
+        root.update_idletasks()
+        simulator._animate_shock_pop(
+            root,
+            max(1, root.winfo_width()),
+            max(1, root.winfo_height()),
+            root.winfo_x(),
+            root.winfo_y(),
+        )
     if args.bridge_result is not None:
         simulator.repeat_var.set(False)
         simulator.arm(test=True)
@@ -4080,6 +4330,7 @@ def main() -> int:
         # it must still make its state and escape controls obvious right away.
         root.after_idle(simulator.show_startup_popup)
     root.mainloop()
+    os._exit(0)
     return 0
 
 

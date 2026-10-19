@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "sounds" / "ransom_ost_to_jumpscare.mp3"
 LEGACY_OUTPUTS = (
     ROOT / "sounds" / "ransom_ost_90.wav",

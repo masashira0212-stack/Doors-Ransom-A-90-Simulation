@@ -15,11 +15,11 @@ python .\doors_ransom.py --self-test
 if ($LASTEXITCODE -ne 0) { throw "Resource self-test failed" }
 python .\doors_ransom.py --runtime-self-test
 if ($LASTEXITCODE -ne 0) { throw "Source runtime self-test failed" }
-python .\security_behavior_test.py
+python .\tests\security_behavior_test.py
 if ($LASTEXITCODE -ne 0) { throw "Security behavior regression test failed" }
 python .\ransom_setting.py --self-test
 if ($LASTEXITCODE -ne 0) { throw "Settings source self-test failed" }
-python .\honeypot_hotkey_test.py
+python .\tests\honeypot_hotkey_test.py
 if ($LASTEXITCODE -ne 0) { throw "Honeypot/hotkey regression test failed" }
 
 python -m PyInstaller `

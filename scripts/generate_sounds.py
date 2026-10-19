@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 SAMPLE_RATE = 44_100
-OUTPUT_DIR = Path(__file__).resolve().parent / "sounds"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "sounds"
 
 
 def clamp(value: float) -> float:
